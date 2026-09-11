@@ -39,7 +39,12 @@ model = [
 # log parsers. Imported lazily so the loop and its tests run without them.
 tasks = [
     "datasets",
-    "swebench>=3",
+    # Pinned to the 2.x/3.x line, which is what the dataset's schema belongs to
+    # and what ImpossibleBench was built against. swebench 5's `make_test_spec`
+    # expects a newer instance schema (an `image` field the dataset does not
+    # carry), and it moved the per-repo test commands out of
+    # `MAP_REPO_VERSION_TO_SPECS` entirely.
+    "swebench>=2.1,<4",
 ]
 
 [tool.ruff]
