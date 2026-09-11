@@ -123,4 +123,5 @@ privilege escalation, no network, no vulnerability.
 - [`docs/decisions.md`](docs/decisions.md) — decision log and open questions.
 - [`docs/stage0-plan.md`](docs/stage0-plan.md) — build checklist.
 - [`docs/setup-log.md`](docs/setup-log.md) — how long a fresh machine takes to set up.
+- [`docs/tomorrow.md`](docs/tomorrow.md) — what to do next, and why.
 - [`docs/sprint.md`](docs/sprint.md) — sprint logistics and deliverables.

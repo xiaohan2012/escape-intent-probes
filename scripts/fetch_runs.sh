@@ -25,7 +25,7 @@ REMOTE="${REMOTE:-eip/runs/}"
 mkdir -p "$DEST"
 
 echo "pulling $HOST:$REMOTE -> $DEST"
-rsync -az --info=stats1,progress2 --partial "$HOST:$REMOTE" "$DEST/"
+rsync -az --stats --partial "$HOST:$REMOTE" "$DEST/"
 
 trajectories=$(find "$DEST" -name meta.json | wc -l | tr -d ' ')
 echo
