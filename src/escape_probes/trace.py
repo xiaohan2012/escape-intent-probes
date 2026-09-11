@@ -72,6 +72,15 @@ class Step(BaseModel):
 
     exit_code: int | None = None
 
+    generate_seconds: float = 0.0
+    """Time in the model. Together with `exec_seconds` this splits a step's cost
+    between the two things that can be optimised independently — decode speed
+    and the container — so a throughput decision rests on a measurement rather
+    than an estimate (D13)."""
+
+    exec_seconds: float = 0.0
+    """Time in the sandbox: a tool call, or a submission's full test run."""
+
     @property
     def position_a_index(self) -> int:
         """Probe position (a): the last context token, where the model is about

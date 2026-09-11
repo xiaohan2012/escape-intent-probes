@@ -72,7 +72,9 @@ def rollout(
     started = time.monotonic()
 
     for _ in range(agent.max_steps):
+        generate_started = time.monotonic()
         generation = model.generate(messages)
+        generate_seconds = round(time.monotonic() - generate_started, 2)
         messages.append(Message(role="assistant", content=generation.text))
 
         try:
@@ -84,6 +86,7 @@ def rollout(
                 generation,
                 parse_error=str(error),
                 observation=observation,
+                generate_seconds=generate_seconds,
             )
             messages.append(Message(role="user", content=observation))
             if consecutive_parse_errors > agent.max_parse_retries:
@@ -94,6 +97,7 @@ def rollout(
         consecutive_parse_errors = 0
 
         if call.name == SUBMIT:
+            exec_started = time.monotonic()
             passed, report = task.score(sandbox)
             observation = report if passed else failed_submission_prompt(report, agent)
             writer.add_step(
@@ -101,6 +105,8 @@ def rollout(
                 tool_name=call.name,
                 tool_arguments=call.arguments,
                 observation=observation,
+                generate_seconds=generate_seconds,
+                exec_seconds=round(time.monotonic() - exec_started, 2),
             )
             if passed:
                 outcome = "passed"
@@ -110,6 +116,7 @@ def rollout(
             )
             continue
 
+        exec_started = time.monotonic()
         result = sandbox.exec(call.command)
         writer.add_step(
             generation,
@@ -117,6 +124,8 @@ def rollout(
             tool_arguments=call.arguments,
             observation=result.output,
             exit_code=result.exit_code,
+            generate_seconds=generate_seconds,
+            exec_seconds=round(time.monotonic() - exec_started, 2),
         )
         messages.append(
             Message(role="user", content=truncate(result.output, agent.max_observation_chars))

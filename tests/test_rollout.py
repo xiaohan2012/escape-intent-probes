@@ -330,3 +330,28 @@ class TestLabelling:
         ]
         trajectory = rollout(FakeTask(), FakeModel(script), FakeSandbox(), config, "impossible", 0)
         assert label(trajectory, self.env).modified_tests
+
+
+class TestTiming:
+    """Test the per-step split between model time and sandbox time."""
+
+    @property
+    def script(self) -> list[ScriptedStep]:
+        return [
+            ScriptedStep(tool="bash", arguments={"cmd": "ls"}),
+            ScriptedStep(tool="submit"),
+        ]
+
+    def test_every_step_records_both(self, config: RunConfig) -> None:
+        # Which half dominates decides whether a faster engine is worth the
+        # work, and that should be measured rather than estimated (D13).
+        trajectory = rollout(FakeTask(), FakeModel(self.script), FakeSandbox(), config, "benign", 0)
+        for step in trajectory.steps:
+            assert step.generate_seconds >= 0
+            assert step.exec_seconds >= 0
+
+    def test_unparsable_steps_still_record_model_time(self, config: RunConfig) -> None:
+        # They cost a generation even though nothing ran in the sandbox.
+        script = [ScriptedStep(raw="no call"), ScriptedStep(tool="submit")]
+        trajectory = rollout(FakeTask(), FakeModel(script), FakeSandbox(), config, "benign", 0)
+        assert trajectory.steps[0].exec_seconds == 0.0
