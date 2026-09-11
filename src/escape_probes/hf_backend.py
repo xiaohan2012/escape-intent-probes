@@ -88,15 +88,22 @@ class HFModel:
         `add_generation_prompt=True` puts the context at the point where the
         model is about to speak — which is also where probe position (a) is
         read, by AgentLens's convention (D14).
+
+        Rendering and tokenising are two explicit steps rather than
+        `tokenize=True`: what that flag returns has changed across transformers
+        versions, and a silently wrong type here would corrupt every token id we
+        store. `add_special_tokens=False` because the template has already put
+        in whatever the model expects.
         """
-        rendered = self.tokenizer.apply_chat_template(
+        text = self.tokenizer.apply_chat_template(
             [message.model_dump() for message in messages],
             tools=TOOL_SCHEMAS,
             add_generation_prompt=True,
-            tokenize=True,
+            tokenize=False,
         )
-        # Tokenizers differ on whether this returns ids or a BatchEncoding.
-        return list(rendered["input_ids"] if isinstance(rendered, dict) else rendered)
+        if not isinstance(text, str):
+            raise TypeError(f"chat template returned {type(text).__name__}, expected str")
+        return list(self.tokenizer(text, add_special_tokens=False)["input_ids"])
 
     def generate(self, messages: Sequence[Message]) -> Generation:
         prompt_ids = self._render(messages)

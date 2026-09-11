@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 import time
 from pathlib import Path
@@ -65,6 +66,9 @@ def main() -> int:
     parser.add_argument("--host", default=None, help="SSH destination of the Docker host")
     parser.add_argument("--max-steps", type=int, default=None)
     args = parser.parse_args()
+
+    # The hub client narrates every metadata request at INFO.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     condition: Condition = args.condition
     config = RunConfig(run_id=args.run_id)
