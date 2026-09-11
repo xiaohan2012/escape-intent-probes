@@ -544,8 +544,9 @@ a format rather than emit the one it was post-trained on.
 **The real backend passes tool schemas to the tokenizer instead:**
 
 ```python
-tokenizer.apply_chat_template(messages, tools=[BASH_SCHEMA, SUBMIT_SCHEMA],
-                              add_generation_prompt=True)
+tokenizer.apply_chat_template(
+    messages, tools=[BASH_SCHEMA, SUBMIT_SCHEMA], add_generation_prompt=True
+)
 ```
 
 The template renders tools exactly as that model family was trained to see
