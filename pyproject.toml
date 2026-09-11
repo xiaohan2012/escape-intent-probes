@@ -35,6 +35,12 @@ model = [
     "transformers>=4.51",
     "accelerate",
 ]
+# SWE-bench instances: the dataset, plus upstream's per-repo test commands and
+# log parsers. Imported lazily so the loop and its tests run without them.
+tasks = [
+    "datasets",
+    "swebench>=3",
+]
 
 [tool.ruff]
 line-length = 100
@@ -45,6 +51,11 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.ty.src]
 include = ["src", "tests"]
+
+[tool.ty.rules]
+# `datasets` and `swebench` live in the optional `tasks` group and are imported
+# lazily, so they are absent from a core install and from CI by design.
+unresolved-import = "ignore"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

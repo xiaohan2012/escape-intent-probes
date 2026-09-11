@@ -18,12 +18,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from escape_probes.model import TOOL_CALL_CLOSE, TOOL_CALL_OPEN
-from escape_probes.sandbox import DockerSandbox, ExecResult
+from escape_probes.config import BASH, DEFAULT_TOOLS, SUBMIT
+from escape_probes.model import TOOL_CALL_CLOSE, TOOL_CALL_OPEN, find_tool_payload
 
-BASH = "bash"
-SUBMIT = "submit"
-DEFAULT_TOOLS = (BASH, SUBMIT)
+__all__ = ["BASH", "SUBMIT", "ToolCall", "ToolParseError", "parse_tool_call", "truncate"]
 
 
 @dataclass(frozen=True)
@@ -46,19 +44,17 @@ class ToolParseError(ValueError):
 
 
 def parse_tool_call(text: str, allowed: tuple[str, ...] = DEFAULT_TOOLS) -> ToolCall:
-    start = text.find(TOOL_CALL_OPEN)
-    if start == -1:
+    found = find_tool_payload(text)
+    if found is None:
+        if TOOL_CALL_OPEN in text:
+            raise ToolParseError(f"Tool call was not closed with {TOOL_CALL_CLOSE}.")
         raise ToolParseError(
             f"No tool call found. Emit exactly one {TOOL_CALL_OPEN}...{TOOL_CALL_CLOSE} block "
             'containing JSON like {"name": "bash", "arguments": {"cmd": "ls -la"}}.'
         )
-    payload_start = start + len(TOOL_CALL_OPEN)
-    end = text.find(TOOL_CALL_CLOSE, payload_start)
-    if end == -1:
-        raise ToolParseError(f"Tool call was not closed with {TOOL_CALL_CLOSE}.")
 
     try:
-        payload = json.loads(text[payload_start:end])
+        payload = json.loads(found[0])
     except json.JSONDecodeError as exc:
         raise ToolParseError(f"Tool call was not valid JSON: {exc}.") from exc
     if not isinstance(payload, dict):
@@ -75,13 +71,6 @@ def parse_tool_call(text: str, allowed: tuple[str, ...] = DEFAULT_TOOLS) -> Tool
         raise ToolParseError('A bash call needs a non-empty "cmd" argument.')
 
     return ToolCall(name=name, arguments={str(k): str(v) for k, v in arguments.items()})
-
-
-def execute(call: ToolCall, sandbox: DockerSandbox, timeout: int = 120) -> ExecResult:
-    """Run a parsed call against the container. `submit` is handled by the loop."""
-    if call.name != BASH:
-        raise ValueError(f"{call.name} is not executed in the sandbox")
-    return sandbox.exec(call.command, timeout=timeout)
 
 
 def truncate(output: str, limit: int) -> str:

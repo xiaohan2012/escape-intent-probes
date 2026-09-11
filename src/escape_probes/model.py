@@ -52,12 +52,6 @@ class Generation(BaseModel):
     recovering it later means re-parsing JSON through a tokenizer (D12)."""
 
     @property
-    def position_a_index(self) -> int:
-        """Probe position (a): the last prompt token, where the model is about
-        to speak. AgentLens's convention (D14)."""
-        return len(self.prompt_token_ids) - 1
-
-    @property
     def token_ids(self) -> tuple[int, ...]:
         return self.prompt_token_ids + self.gen_token_ids
 
@@ -101,6 +95,24 @@ class CharTokenizer:
     @property
     def vocab_size(self) -> int:
         return len(self._vocab)
+
+
+def find_tool_payload(text: str) -> tuple[str, int] | None:
+    """The JSON payload of the first tool call, and where it starts in `text`.
+
+    One definition of the wire format, shared by the parser and by whatever
+    computes probe position (b). Two copies drifted once already — one accepted
+    an unclosed block that the other rejected — and the failure mode of that
+    drift is a silently wrong position (b) rather than a crash.
+    """
+    start = text.find(TOOL_CALL_OPEN)
+    if start == -1:
+        return None
+    payload_start = start + len(TOOL_CALL_OPEN)
+    end = text.find(TOOL_CALL_CLOSE, payload_start)
+    if end == -1:
+        return None
+    return text[payload_start:end], payload_start
 
 
 def render_tool_call(name: str, arguments: dict[str, str]) -> str:
@@ -172,27 +184,28 @@ class FakeModel:
         )
 
 
-def _command_token_index(text: str, tokenizer: CharTokenizer) -> int | None:
-    """Token index, within `text`, of the first token of the command string.
+def command_char_offset(text: str) -> int | None:
+    """Character offset of the first token of the tool call's command string.
 
-    Probe position (b): the last moment before the action is emitted. Under the
-    character tokenizer this is the token count of everything preceding the
-    command, which is what the real backend will compute from its own offsets.
+    Probe position (b) is the last moment before the action is emitted. A
+    backend maps this offset through its own tokenizer; the offset itself is
+    format knowledge, not tokenizer knowledge, so it lives here once.
     """
-    start = text.find(TOOL_CALL_OPEN)
-    if start == -1:
+    found = find_tool_payload(text)
+    if found is None:
         return None
-    payload_start = start + len(TOOL_CALL_OPEN)
-    end = text.find(TOOL_CALL_CLOSE, payload_start)
-    payload = text[payload_start : end if end != -1 else len(text)]
+    payload, payload_start = found
     try:
         arguments = json.loads(payload).get("arguments", {})
     except json.JSONDecodeError:
         return None
     if not arguments:
         return None
-    first_value = next(iter(arguments.values()))
-    offset = text.find(str(first_value), payload_start)
-    if offset == -1:
-        return None
-    return len(tokenizer.encode(text[:offset]))
+    first_value = str(next(iter(arguments.values())))
+    offset = text.find(first_value, payload_start)
+    return None if offset == -1 else offset
+
+
+def _command_token_index(text: str, tokenizer: CharTokenizer) -> int | None:
+    offset = command_char_offset(text)
+    return None if offset is None else len(tokenizer.encode(text[:offset]))

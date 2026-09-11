@@ -25,6 +25,8 @@ class FakeSandbox:
     touches the container itself.
     """
 
+    image = "swebench/sweb.eval.x86_64.fake:latest"
+
     def __init__(self, outputs: dict[str, str] | None = None) -> None:
         self.commands: list[str] = []
         self.outputs = outputs or {}
@@ -122,6 +124,15 @@ class TestRollout:
         )
         assert "DO NOT MODIFY THE TESTS" in trajectory.steps[0].observation
 
+    def test_records_the_image_the_sandbox_runs(self, config: RunConfig) -> None:
+        # Provenance comes from the sandbox rather than being re-derived from
+        # the instance id, so it stays true for any sandbox implementation.
+        sandbox = FakeSandbox()
+        trajectory = rollout(
+            FakeTask(), FakeModel(self.crossing_script), sandbox, config, "impossible", 0
+        )
+        assert trajectory.meta.image == sandbox.image
+
     def test_records_the_final_diff(self, config: RunConfig) -> None:
         sandbox = FakeSandbox({"git diff": "diff --git a/x b/x"})
         trajectory = rollout(
@@ -177,14 +188,36 @@ class TestTokenSpans:
             ScriptedStep(tool="submit"),
         ]
 
-    def test_spans_tile_the_token_stream(self, config: RunConfig) -> None:
+    def test_spans_nest_inside_the_final_conversation(self, config: RunConfig) -> None:
+        # A chat template is append-only, so each step's context is a prefix of
+        # the next one's and the stream holds the conversation exactly once.
         trajectory = rollout(FakeTask(), FakeModel(self.script), FakeSandbox(), config, "benign", 0)
-        cursor = 0
+        previous_end = 0
         for step in trajectory.steps:
-            assert step.prompt_span[0] == cursor
+            assert step.prompt_span[0] == 0
+            assert step.prompt_span[1] >= previous_end
             assert step.prompt_span[1] == step.gen_span[0]
-            cursor = step.gen_span[1]
-        assert cursor == len(trajectory.token_ids)
+            previous_end = step.prompt_span[1]
+        assert trajectory.steps[-1].gen_span[1] == len(trajectory.token_ids)
+
+    def test_stream_holds_the_conversation_once(self, config: RunConfig) -> None:
+        # The failure this guards: concatenating per-step prompts would store
+        # the prefix once per step, and Pass 2 would teacher-force a document
+        # with its own beginning repeated.
+        trajectory = rollout(FakeTask(), FakeModel(self.script), FakeSandbox(), config, "benign", 0)
+        longest_prompt = max(step.prompt_span[1] for step in trajectory.steps)
+        assert len(trajectory.token_ids) == longest_prompt + len(
+            range(*trajectory.steps[-1].gen_span)
+        )
+
+    def test_rejects_a_backend_that_rewrites_history(self, config: RunConfig) -> None:
+        from escape_probes.model import Generation
+        from escape_probes.trace import TrajectoryWriter
+
+        writer = TrajectoryWriter()
+        writer.add_step(Generation(prompt_token_ids=(1, 2, 3), gen_token_ids=(4,), text="a"))
+        with pytest.raises(ValueError, match="does not extend"):
+            writer.add_step(Generation(prompt_token_ids=(9, 9), gen_token_ids=(5,), text="b"))
 
     def test_position_a_is_the_last_context_token(self, config: RunConfig) -> None:
         trajectory = rollout(FakeTask(), FakeModel(self.script), FakeSandbox(), config, "benign", 0)

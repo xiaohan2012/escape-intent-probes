@@ -56,11 +56,6 @@ class TestRenderToolCall:
 class TestGeneration:
     """Test the per-step generation record."""
 
-    def test_position_a_is_the_last_prompt_token(self) -> None:
-        # AgentLens's convention: the slot where the model is about to speak (D14).
-        gen = Generation(prompt_token_ids=(1, 2, 3), gen_token_ids=(4, 5), text="x")
-        assert gen.position_a_index == 2
-
     def test_token_ids_concatenate_prompt_then_generation(self) -> None:
         gen = Generation(prompt_token_ids=(1, 2), gen_token_ids=(3,), text="x")
         assert gen.token_ids == (1, 2, 3)

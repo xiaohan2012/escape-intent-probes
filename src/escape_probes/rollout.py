@@ -25,11 +25,11 @@ import hashlib
 import time
 from typing import Protocol
 
-from escape_probes.config import Condition, RunConfig
+from escape_probes.config import SUBMIT, Condition, RunConfig
 from escape_probes.model import Message, ModelBackend
 from escape_probes.prompts import failed_submission_prompt, retry_prompt, system_prompt
-from escape_probes.sandbox import Sandbox, image_for
-from escape_probes.tools import BASH, SUBMIT, ToolParseError, parse_tool_call, truncate
+from escape_probes.sandbox import Sandbox
+from escape_probes.tools import ToolParseError, parse_tool_call, truncate
 from escape_probes.trace import Outcome, Trajectory, TrajectoryMeta, TrajectoryWriter
 
 
@@ -60,7 +60,7 @@ def rollout(
     seed: int,
 ) -> Trajectory:
     agent = config.agent
-    prompt = system_prompt(agent, task.test_command, max_attempts=agent.max_steps)
+    prompt = system_prompt(agent, task.test_command)
     messages = [
         Message(role="system", content=prompt),
         Message(role="user", content=task.problem_statement),
@@ -69,7 +69,6 @@ def rollout(
     writer = TrajectoryWriter()
     outcome: Outcome = "max_steps"
     consecutive_parse_errors = 0
-    n_parse_errors = 0
     started = time.monotonic()
 
     for _ in range(agent.max_steps):
@@ -79,13 +78,10 @@ def rollout(
         try:
             call = parse_tool_call(generation.text, allowed=agent.tools)
         except ToolParseError as error:
-            n_parse_errors += 1
             consecutive_parse_errors += 1
             observation = retry_prompt(str(error))
             writer.add_step(
-                generation.prompt_token_ids,
-                generation.gen_token_ids,
-                generation.tool_start_token_idx,
+                generation,
                 parse_error=str(error),
                 observation=observation,
             )
@@ -101,9 +97,7 @@ def rollout(
             passed, report = task.score(sandbox)
             observation = report if passed else failed_submission_prompt(report, agent)
             writer.add_step(
-                generation.prompt_token_ids,
-                generation.gen_token_ids,
-                generation.tool_start_token_idx,
+                generation,
                 tool_name=call.name,
                 tool_arguments=call.arguments,
                 observation=observation,
@@ -118,9 +112,7 @@ def rollout(
 
         result = sandbox.exec(call.command)
         writer.add_step(
-            generation.prompt_token_ids,
-            generation.gen_token_ids,
-            generation.tool_start_token_idx,
+            generation,
             tool_name=call.name,
             tool_arguments=call.arguments,
             observation=result.output,
@@ -133,6 +125,8 @@ def rollout(
     if outcome == "max_steps" and writer.steps and writer.steps[-1].tool_name == SUBMIT:
         outcome = "failed"
 
+    n_parse_errors = sum(1 for step in writer.steps if step.parse_error)
+
     meta = TrajectoryMeta(
         run_id=config.run_id,
         instance_id=task.instance_id,
@@ -143,7 +137,7 @@ def rollout(
         prompt_level=agent.prompt_level,
         cue_strength=config.env.cue_strength,
         tools=agent.tools,
-        image=image_for(task.instance_id),
+        image=sandbox.image,
         system_prompt_sha=hashlib.sha256(prompt.encode()).hexdigest()[:16],
         outcome=outcome,
         n_steps=len(writer.steps),
@@ -154,4 +148,4 @@ def rollout(
     return Trajectory(meta=meta, steps=writer.steps, token_ids=writer.token_ids)
 
 
-__all__ = ["BASH", "Task", "rollout"]
+__all__ = ["Task", "rollout"]

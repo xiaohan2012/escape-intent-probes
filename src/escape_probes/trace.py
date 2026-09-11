@@ -16,6 +16,18 @@ Layout, one directory per trajectory:
 Token ids are one continuous array rather than per-step slices: Pass 2 runs a
 single forward over the whole context and needs absolute indices, and
 re-concatenating slices would introduce exactly the mismatch E4 exists to catch.
+
+The stream is the **final** conversation, not a concatenation of per-step
+prompts. A chat template is append-only, so every step's prompt is a prefix of
+the last one; storing each step's prompt separately would keep the conversation
+prefix twenty-five times over, and concatenating them would produce a document
+with its own beginning repeated — which Pass 2 would then teacher-force as text
+the model never saw in that order.
+
+Step spans therefore **nest** rather than tile: step k's `prompt_span` is
+`(0, n_k)` for a growing `n_k`, and its `gen_span` covers the tokens the model
+emitted at that point. Pass 2 forwards the stream once and reads each step's
+positions out of it.
 """
 
 from __future__ import annotations
@@ -26,13 +38,10 @@ from typing import Any, Literal
 import numpy as np
 from pydantic import BaseModel, Field
 
-from escape_probes.config import DIR_SEPARATOR, Condition, RunConfig
+from escape_probes.config import Condition
+from escape_probes.model import Generation
 
-Outcome = Literal["passed", "failed", "gave_up", "max_steps", "parse_failed", "error"]
-
-
-def trajectory_dirname(instance_id: str, condition: Condition, seed: int) -> str:
-    return DIR_SEPARATOR.join([instance_id, condition, str(seed)])
+Outcome = Literal["passed", "failed", "max_steps", "parse_failed", "error"]
 
 
 class Step(BaseModel):
@@ -41,10 +50,11 @@ class Step(BaseModel):
     step_idx: int
 
     prompt_span: tuple[int, int]
-    """[start, end) of this step's context in the token stream."""
+    """[0, end) — the context the model saw at this step. Nested, not tiled:
+    each step's prompt is a prefix of the next one's."""
 
     gen_span: tuple[int, int]
-    """[start, end) of the model's generation."""
+    """[start, end) of the tokens the model emitted at this step."""
 
     tool_start_token_idx: int | None = None
     """Absolute index of the first token of the tool call's command string —
@@ -119,9 +129,6 @@ class Trajectory(BaseModel):
         token_ids = np.load(directory / "tokens.npy").tolist()
         return cls(meta=meta, steps=steps, token_ids=token_ids)
 
-    def directory_in(self, config: RunConfig) -> Path:
-        return config.trajectory_dir(self.meta.instance_id, self.meta.condition, self.meta.seed)
-
 
 class TrajectoryWriter:
     """Accumulates a trajectory while the loop runs.
@@ -134,28 +141,32 @@ class TrajectoryWriter:
     def __init__(self) -> None:
         self.token_ids: list[int] = []
         self.steps: list[Step] = []
+        self._prompt: tuple[int, ...] = ()
 
-    def add_step(
-        self,
-        prompt_token_ids: tuple[int, ...],
-        gen_token_ids: tuple[int, ...],
-        tool_start_offset: int | None,
-        **fields: Any,
-    ) -> Step:
-        """Append one step. `tool_start_offset` is relative to the generation;
-        it is stored absolute."""
-        prompt_start = len(self.token_ids)
-        self.token_ids.extend(prompt_token_ids)
-        gen_start = len(self.token_ids)
-        self.token_ids.extend(gen_token_ids)
+    def add_step(self, generation: Generation, **fields: Any) -> Step:
+        """Record one step, keeping the stream at the full conversation so far.
 
+        The new prompt must extend the previous one. If it does not, the backend
+        re-rendered earlier turns between steps, and Pass 2 would replay a
+        sequence the model never actually saw — the same class of failure E4
+        checks for, caught here for free.
+        """
+        prompt = generation.prompt_token_ids
+        if prompt[: len(self._prompt)] != self._prompt:
+            raise ValueError(
+                f"step {len(self.steps)}: this step's prompt does not extend the last one; "
+                "the backend re-rendered earlier turns"
+            )
+
+        self._prompt = prompt
+        self.token_ids = list(prompt) + list(generation.gen_token_ids)
+
+        offset = generation.tool_start_token_idx
         step = Step(
             step_idx=len(self.steps),
-            prompt_span=(prompt_start, gen_start),
-            gen_span=(gen_start, len(self.token_ids)),
-            tool_start_token_idx=None
-            if tool_start_offset is None
-            else gen_start + tool_start_offset,
+            prompt_span=(0, len(prompt)),
+            gen_span=(len(prompt), len(self.token_ids)),
+            tool_start_token_idx=None if offset is None else len(prompt) + offset,
             **fields,
         )
         self.steps.append(step)

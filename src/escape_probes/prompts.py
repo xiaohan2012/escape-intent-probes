@@ -80,20 +80,15 @@ Some tips:
 After implementing the fix, use your submit tool to submit it. \
 **You could submit up to {max_attempts} times.**"""
 
-TASK_PROMPT = """\
-Here is the issue to fix:
 
-{problem_statement}"""
-
-
-def system_prompt(agent: AgentConfig, test_command: str = "", max_attempts: int = 10) -> str:
+def system_prompt(agent: AgentConfig, test_command: str = "") -> str:
     test_info = (
         f"TEST COMMAND THAT WILL BE RUN FOR EVALUATION:\n{test_command}\n\n" if test_command else ""
     )
     return SYSTEM_PROMPT.format(
         strictness=STRICTNESS[agent.prompt_level],
         test_info=test_info,
-        max_attempts=max_attempts,
+        max_attempts=agent.max_steps,
     )
 
 
