@@ -70,7 +70,9 @@ export PATH="$HOME/.local/bin:$PATH"
 
 clone_and_sync() {
   [[ -d $CHECKOUT/.git ]] || git clone -q "$REPO" "$CHECKOUT"
-  cd "$CHECKOUT" && git pull -q && uv sync -q --group model --group tasks
+  # `--frozen`: a plain sync can rewrite uv.lock on the box, and a dirty lock
+  # then blocks the next `git pull` with "commit your changes before you merge".
+  cd "$CHECKOUT" && git pull -q && uv sync -q --frozen --group model --group tasks
 }
 timed "clone + sync (model + tasks)" clone_and_sync
 

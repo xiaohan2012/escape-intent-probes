@@ -36,12 +36,23 @@ not in the `docker` group — `sudo usermod -aG docker ubuntu`, then reconnect.
 | Clone repo + `uv sync` | **4 s** |
 | Download Qwen3-Coder-30B-A3B-Instruct (57 GB) | **65 s** |
 | Pull 3 SWE-bench images | **70 s** |
-| Unit test suite (59 tests) | **0.5 s** |
-| Docker integration suite (19 tests) | **45 s** |
+| Install torch + transformers (`model` group) | **~60 s** |
+| Unit test suite | **0.5 s** |
+| Docker integration suite | **45 s** |
+| Load Qwen3-Coder-30B-A3B onto the GPU | **~20 s** (531 shards) |
 
 Model and images were fetched concurrently, so wall-clock from a bare instance
 to a verified environment is **about two minutes**. Terminate the box when idle
 without hesitation.
+
+Two things that cost time the first round and should not cost it again:
+
+* **Sync with `--frozen`.** A plain `uv sync --group ...` rewrites `uv.lock` on
+  the box, and the dirty lock then blocks the next `git pull` with "commit your
+  changes before you merge".
+* **`swebench` is pinned to 2.x/3.x**, following the dataset schema rather than
+  recency — see the note in `tasks.py`. Installing latest gives an API that
+  cannot read these instances at all.
 
 Lambda instances **cannot be paused** — stopping one destroys its data — so
 anything worth keeping (trajectories above all) must be copied off, not left
