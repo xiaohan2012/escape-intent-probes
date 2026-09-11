@@ -24,6 +24,7 @@ from __future__ import annotations
 import shlex
 import subprocess
 from dataclasses import dataclass
+from typing import Protocol
 
 from escape_probes.config import EnvConfig
 
@@ -50,6 +51,17 @@ class ExecResult:
         most of what it has to say on stderr."""
         parts = [p for p in (self.stdout, self.stderr) if p]
         return "\n".join(parts)
+
+
+class Sandbox(Protocol):
+    """What the rollout loop needs: somewhere to run a command.
+
+    Narrower than `DockerSandbox` on purpose — the loop never starts, stops or
+    inspects a container, so a test double implementing this one method is a
+    legitimate substitute rather than a mock of something larger.
+    """
+
+    def exec(self, command: str, timeout: int = 120, workdir: str | None = None) -> ExecResult: ...
 
 
 class SandboxError(RuntimeError):

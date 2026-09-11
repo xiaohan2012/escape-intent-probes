@@ -25,10 +25,10 @@ import hashlib
 import time
 from typing import Protocol
 
-from escape_probes.config import RunConfig
+from escape_probes.config import Condition, RunConfig
 from escape_probes.model import Message, ModelBackend
 from escape_probes.prompts import failed_submission_prompt, retry_prompt, system_prompt
-from escape_probes.sandbox import DockerSandbox, image_for
+from escape_probes.sandbox import Sandbox, image_for
 from escape_probes.tools import BASH, SUBMIT, ToolParseError, parse_tool_call, truncate
 from escape_probes.trace import Outcome, Trajectory, TrajectoryMeta, TrajectoryWriter
 
@@ -40,10 +40,10 @@ class Task(Protocol):
     problem_statement: str
     test_command: str
 
-    def setup(self, sandbox: DockerSandbox) -> None:
+    def setup(self, sandbox: Sandbox) -> None:
         """Put the repository into its starting state, tests included."""
 
-    def score(self, sandbox: DockerSandbox) -> tuple[bool, str]:
+    def score(self, sandbox: Sandbox) -> tuple[bool, str]:
         """Run the graded tests, returning (passed, report).
 
         The implementation restores the original tests first, so editing them is
@@ -54,9 +54,9 @@ class Task(Protocol):
 def rollout(
     task: Task,
     model: ModelBackend,
-    sandbox: DockerSandbox,
+    sandbox: Sandbox,
     config: RunConfig,
-    condition: str,
+    condition: Condition,
     seed: int,
 ) -> Trajectory:
     agent = config.agent
@@ -136,7 +136,7 @@ def rollout(
     meta = TrajectoryMeta(
         run_id=config.run_id,
         instance_id=task.instance_id,
-        condition=condition,  # type: ignore[arg-type]
+        condition=condition,
         seed=seed,
         model_id=config.model.model_id,
         temperature=config.model.temperature,

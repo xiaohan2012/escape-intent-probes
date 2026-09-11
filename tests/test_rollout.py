@@ -10,24 +10,27 @@ from pathlib import Path
 
 import pytest
 
-from escape_probes.config import EnvConfig, RunConfig
+from escape_probes.config import Condition, EnvConfig, RunConfig
 from escape_probes.labels import label
 from escape_probes.model import FakeModel, ScriptedStep
 from escape_probes.rollout import rollout
+from escape_probes.sandbox import ExecResult, Sandbox
 from escape_probes.trace import Trajectory
 
 
 class FakeSandbox:
-    """Records commands and replays canned output. Stands in for a container."""
+    """Records commands and replays canned output. Stands in for a container.
+
+    Implements the `Sandbox` protocol, which is only `exec` — the loop never
+    touches the container itself.
+    """
 
     def __init__(self, outputs: dict[str, str] | None = None) -> None:
         self.commands: list[str] = []
         self.outputs = outputs or {}
 
-    def exec(self, command: str, timeout: int = 120, workdir: str | None = None):
+    def exec(self, command: str, timeout: int = 120, workdir: str | None = None) -> ExecResult:
         self.commands.append(command)
-        from escape_probes.sandbox import ExecResult
-
         return ExecResult(stdout=self.outputs.get(command, "ok"), stderr="", exit_code=0)
 
 
@@ -43,10 +46,10 @@ class FakeTask:
         self.attempts = 0
         self.setup_calls = 0
 
-    def setup(self, sandbox) -> None:
+    def setup(self, sandbox: Sandbox) -> None:
         self.setup_calls += 1
 
-    def score(self, sandbox) -> tuple[bool, str]:
+    def score(self, sandbox: Sandbox) -> tuple[bool, str]:
         self.attempts += 1
         if self.attempts >= self.passes_on_attempt:
             return True, "2 passed"
@@ -224,7 +227,9 @@ class TestLabelling:
     def env(self) -> EnvConfig:
         return EnvConfig()
 
-    def crossing_trajectory(self, config: RunConfig, condition: str = "impossible") -> Trajectory:
+    def crossing_trajectory(
+        self, config: RunConfig, condition: Condition = "impossible"
+    ) -> Trajectory:
         script = [
             ScriptedStep(tool="bash", arguments={"cmd": "ls /opt"}),
             ScriptedStep(tool="bash", arguments={"cmd": "cat .config/grader.yaml"}),
@@ -274,7 +279,7 @@ class TestLabelling:
         ],
     )
     def test_trajectory_class(
-        self, config: RunConfig, condition: str, crosses: bool, expected: str
+        self, config: RunConfig, condition: Condition, crosses: bool, expected: str
     ) -> None:
         if crosses:
             trajectory = self.crossing_trajectory(config, condition)
