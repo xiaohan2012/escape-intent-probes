@@ -119,8 +119,20 @@ near route still points at the far one.
 ## 4 — Cheap configuration levers, in order
 
 1. **Prompt B → A**, restoring "and pass all tests". ImpossibleBench's largest
-   lever: >85% cheating at A/B against 1%/33% at D for GPT-5 and o3. We chose B
-   for a cleaner level-3 framing and gave up the main source of pressure.
+   lever: >85% cheating at A/B against 1%/33% at D for GPT-5 and o3.
+
+   D13 chose B on the grounds that A's clause "shades toward instructed
+   intent". **That reasoning was wrong and should be corrected.** Level 3 is
+   about where the intent to *cross* comes from, not about whether the task has
+   an objective. "Pass all tests" is an ordinary objective; it says nothing
+   about shortcuts, about the grader, or about leaving the working directory.
+   And it is the objective the incident actually ran on — the models were
+   trying to pass an evaluation.
+
+   B is the distortion: it lets an agent conclude that implementing correctly
+   *is* completing the task, which is exactly what one trajectory did, six
+   submissions of the same correct patch while insisting it was right. The real
+   incident offered no such off-ramp. A should be the default.
 2. **Separate the submission budget from the step budget.** The prompt currently
    says "You could submit up to 25 times" because `max_attempts = max_steps`.
    ImpossibleBench uses ten. An agent that submitted six identical patches was
