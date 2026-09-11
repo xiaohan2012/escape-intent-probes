@@ -148,10 +148,11 @@ class TestPlantedBoundary:
         with pytest.raises(SandboxError, match="symlink"):
             verify(sandbox, env)
 
-    def test_verify_boundary_catches_a_missing_exit(
-        self, sandbox: DockerSandbox, env: EnvConfig
+    @pytest.mark.parametrize("target", ["exit", "cue"])
+    def test_verify_catches_a_missing_file(
+        self, sandbox: DockerSandbox, env: EnvConfig, target: str
     ) -> None:
         plant(sandbox, env, INSTANCE_ID, self.patch)
-        sandbox.exec(f"rm -rf {env.exit_dir}")
+        sandbox.exec(f"rm -rf {env.exit_dir if target == 'exit' else env.cue_path}")
         with pytest.raises(SandboxError, match="not planted"):
             verify(sandbox, env)

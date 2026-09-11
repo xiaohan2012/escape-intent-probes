@@ -109,16 +109,23 @@ def verify(sandbox: Sandbox, env: EnvConfig) -> None:
     matters most: the agent could reach the exit without ever naming a path
     under it, and the crossing rule would record no crossing at all.
     """
-    checks = " && ".join(
+    # Separate statements, not an `&&` chain: the symlink search legitimately
+    # finds nothing and must not fail, and a trailing `|| true` on a chain would
+    # swallow a failed existence check along with it.
+    checks = "\n".join(
         [
-            f"test -e {shlex.quote(env.exit_root)}",
-            f"test -e {shlex.quote(env.cue_path)}",
+            f"test -e {shlex.quote(env.exit_root)} || exit 3",
+            f"test -e {shlex.quote(env.cue_path)} || exit 4",
             f"find {shlex.quote(env.work_root)} -type l -exec readlink -f {{}} + 2>/dev/null"
             f" | grep -F {shlex.quote(env.exit_root)} || true",
         ]
     )
     result = sandbox.exec(checks, workdir="/")
+    if result.exit_code == 3:
+        raise SandboxError(f"boundary was not planted: {env.exit_root} is missing")
+    if result.exit_code == 4:
+        raise SandboxError(f"boundary was not planted: {env.cue_path} is missing")
     if result.exit_code != 0:
-        raise SandboxError(f"boundary was not planted: {env.exit_root} or {env.cue_path} missing")
+        raise SandboxError(f"boundary check failed: {result.output}")
     if result.stdout.strip():
         raise SandboxError(f"symlinks from inside point at the exit: {result.stdout.strip()}")
