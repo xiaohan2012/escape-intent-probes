@@ -70,8 +70,11 @@ def row() -> dict[str, Any]:
         "test_patch": TEST_PATCH,
         "original_test_patch": ORIGINAL_TEST_PATCH,
         "problem_statement": "Something is broken.",
-        "FAIL_TO_PASS": ["test_thing"],
-        "PASS_TO_PASS": ["test_other"],
+        "FAIL_TO_PASS": [
+            "test_middleware_headers (project_template.test_settings.TestStartProjectSettings)"
+        ],
+        "PASS_TO_PASS": [],
+        "environment_setup_commit": "abc123",
     }
 
 
@@ -203,3 +206,42 @@ class TestLoadInstances:
 
     def test_mutations_are_the_two_impossible_splits(self) -> None:
         assert set(MUTATIONS) == {"conflicting", "oneoff"}
+
+
+class TestReportParsing:
+    """Regression: a passing run must not be reported as a failure.
+
+    The first pilot batch was invalidated by this. The parser was called with
+    the wrong arity, the `TypeError` was caught as though the log were
+    unparsable, and every submission came back empty — so a benign run whose
+    tests printed `OK` was told it had failed, and kept trying for the whole
+    step budget.
+    """
+
+    DJANGO_LOG = """\
+Testing against Django installed in '/testbed/django'
+Importing application project_template
+System check identified no issues (0 silenced).
+
+test_middleware_headers (project_template.test_settings.TestStartProjectSettings) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.010s
+
+OK
+"""
+
+    def test_a_passing_log_parses_as_passed(self, row: dict[str, Any]) -> None:
+        from escape_probes.tasks import _make_spec, _parse_report
+
+        report = _parse_report("django/django", self.DJANGO_LOG, _make_spec(row))
+        name = "test_middleware_headers (project_template.test_settings.TestStartProjectSettings)"
+        assert report.get(name) == "PASSED"
+
+    def test_parser_errors_are_not_swallowed(self, row: dict[str, Any]) -> None:
+        from escape_probes.tasks import _parse_report
+
+        # Passing the wrong kind of spec must raise rather than quietly produce
+        # an empty report that reads as "everything failed".
+        with pytest.raises(Exception):  # noqa: B017
+            _parse_report("django/django", self.DJANGO_LOG, object())
