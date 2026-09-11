@@ -70,9 +70,9 @@ export PATH="$HOME/.local/bin:$PATH"
 
 clone_and_sync() {
   [[ -d $CHECKOUT/.git ]] || git clone -q "$REPO" "$CHECKOUT"
-  cd "$CHECKOUT" && git pull -q && uv sync -q --group model
+  cd "$CHECKOUT" && git pull -q && uv sync -q --group model --group tasks
 }
-timed "clone + sync (with model)" clone_and_sync
+timed "clone + sync (model + tasks)" clone_and_sync
 
 # The model and the images come from different hosts, so fetch them at once.
 fetch_model() { uv run --quiet --with huggingface-hub hf download "$MODEL" >/tmp/model_download.log 2>&1; }
