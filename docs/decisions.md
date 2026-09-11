@@ -354,6 +354,15 @@ this list directly). This is not cherry-picking: E1 requires ≥70% benign pass
 rate, and keeping unsolvable instances both fails E1 and confounds difficulty
 with pressure. State the selection rule in the report.
 
+**Spread the 20 across repositories.** SWE-bench's prebuilt images are layered —
+a `sweb.env.*` layer shared by instances of the same repo and version, plus a
+thin per-instance layer — so concentrating the 20 in two or three repos would
+cut the download substantially. Do not: instances from one repo share code style
+and the same opportunities for shortcuts, which shrinks the effective sample
+size the design effect above already discounts. Having compressed the task count
+to 20 for cost, spending the remaining diversity to save disk is a bad trade.
+Pick across repos from whatever the capability check leaves available.
+
 **Not a Stage 0 decision, but the reason the task count is 20:** Stage 1 splits
 by task, and a single 14/6 split leaves too few held-out tasks for a credible
 AUROC. Plan on grouped k-fold CV over tasks (5 folds), so every task enters the
@@ -431,10 +440,29 @@ condition with t\* null; step-index stratification from `step_idx`.
 |---|---|---|
 | Prompt level | **B**, not A | A's clause "and pass all tests" is explicit pressure to pass, which shades toward instructed intent; B is cleaner for a level-3 setting. Drop to A if E2 comes in low. |
 | Cue strength | **Explicit full path** (strongest of the three) | What design doc §6.1 specifies. Protect E2 first; weaken later if benign trajectories start crossing. |
-| Rollout engine | **HF `generate()`**, not vLLM | Per D11, make it run first. D2 means switching engines later does not invalidate the data. |
+| Rollout engine | **HF `generate()`**, not vLLM; serial, not concurrent | Per D11, make it run first. D2 means switching engines later does not invalidate the data. See the throughput note below. |
 | Max steps | **25** | As in the design doc. |
 | Containers | **A fresh container per trajectory** | The agent has root and will damage the environment; reuse would leak state between trajectories. |
 | Scoring | On each `submit`, reset `test.py` to the original before running | Per D8. |
+
+**Throughput, and when serial stops being enough.** A back-of-envelope estimate
+— 30 tok/s single-stream on a 30B-A3B under HF `generate()`, ~500 generated
+tokens per step, 25 steps — puts one trajectory near 7 minutes and the full 160
+near 18 hours, which does not fit a weekend. That number is an estimate, not a
+measurement, so the plan is: **run serially through E1 and E2, measure the real
+throughput there, and let the measurement decide.** E1 needs 10–15 trajectories
+and the E2 pilot 20, both of which finish serially either way, so they double as
+the benchmark.
+
+If the measurement says serial will not finish the full rollout, the fix is a
+**vLLM server plus N concurrent trajectory workers**, not hand-written batching:
+each worker keeps its own sequential loop and sends requests, and vLLM's
+continuous batching does the scheduling. Concurrency would then be bounded by
+CPU as much as by the GPU, since every trajectory holds a container running a
+real test suite — 8–16 concurrent is realistic on a 32-vCPU box.
+
+What this costs now: nothing but keeping the `ModelBackend` protocol honest, so
+a `VLLMModel` can be added without touching the loop.
 
 ---
 
