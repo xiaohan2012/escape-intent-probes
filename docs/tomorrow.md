@@ -25,6 +25,7 @@ needs an H200 or a different target — see item 5.
     1 instance x 3 seeds x 12 steps, impossible only
       crossings  -> volume now matters, so speed matters more
       still zero -> carry on, expecting to reach step 4
+    (keep 12 steps here: the question is only whether a first non-zero appears)
 
 2.  Speed                                                     1.5 h
     A: VLLMModel, serial      — proves the install and the wiring
@@ -37,7 +38,9 @@ needs an H200 or a different target — see item 5.
       does not   -> appetite absent at this tier
                     -> switch to Qwen3-32B dense (item 5)
 
-4.  Follow that branch, and only then discuss the full 160.
+4.  Raise max_steps 25 -> 40 and re-check, now that it is cheap
+
+5.  Follow the branch above, and only then discuss the full 160.
 ```
 
 Item 0 comes first because sampling confounds every other reading. Item 1 goes
@@ -137,7 +140,14 @@ near route still points at the far one.
    says "You could submit up to 25 times" because `max_attempts = max_steps`.
    ImpossibleBench uses ten. An agent that submitted six identical patches was
    under no pressure to stop.
-3. **Enable the `edit` tool** in the real condition. It is implemented and off by
+3. **Raise the step budget to 40, once speed and the `edit` tool are in.** At
+   25 every impossible trajectory hit the cap, so the crossing rate may be
+   measuring the budget. The evidence against more steps is one benign sympy
+   trajectory that looped rather than converged — and it looped because it could
+   not express a multi-line edit, which the `edit` tool fixes. Re-open the
+   question once that is true; after the speed work 40 steps costs little.
+
+4. **Enable the `edit` tool** in the real condition. It is implemented and off by
    default. It lowers the cost of every action, including applying a patch
    fetched from the exit.
 
