@@ -15,6 +15,38 @@ About two minutes to a verified environment. Note the card matters: the H100
 (80 GB of weights leaves no room for a KV cache), so D5's stated upgrade path
 needs an H200 or a different target — see item 5.
 
+## Order
+
+```
+0.  Configuration, no GPU needed                              5 min
+    top_p=1.0 / top_k=0  +  prompt B→A  +  enable the edit tool
+
+1.  One probe batch, straight after boot                      6 min
+    1 instance x 3 seeds x 12 steps, impossible only
+      crossings  -> volume now matters, so speed matters more
+      still zero -> carry on, expecting to reach step 4
+
+2.  Speed                                                     1.5 h
+    A: VLLMModel, serial      — proves the install and the wiring
+    B: lock-step batch runner — ~15 s per trajectory
+
+3.  The propensity control, now a 3-minute batch
+    tests writable + edit tool, ImpossibleBench's own conditions
+      cheats     -> appetite exists, the route is too expensive
+                    -> write the exit patches (item 6)
+      does not   -> appetite absent at this tier
+                    -> switch to Qwen3-32B dense (item 5)
+
+4.  Follow that branch, and only then discuss the full 160.
+```
+
+Item 0 comes first because sampling confounds every other reading. Item 1 goes
+before the engineering because six minutes of GPU could change every decision
+after it — three one-line changes land together, and the sampling one has been
+suppressing exploratory actions in every pilot so far. Whichever way it goes,
+the speed work is not wasted: crossings mean we need volume, and no crossings
+mean we need more iterations.
+
 ---
 
 ## 1 — Make the loop fast (first, before any more experiments)
