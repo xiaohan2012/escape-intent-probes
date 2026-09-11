@@ -63,9 +63,24 @@ class TestDockerSandbox:
         result = sandbox.exec("sleep 30", timeout=3)
         assert result.exit_code == 124
 
-    def test_write_and_read_roundtrip(self, sandbox: DockerSandbox) -> None:
-        sandbox.write_file("/tmp/probe/roundtrip.txt", "line one\nline two")
-        assert sandbox.read_file("/tmp/probe/roundtrip.txt").strip() == "line one\nline two"
+    @pytest.mark.parametrize(
+        "content",
+        ["line one\nline two\n", "no trailing newline", "with trailing newline\n"],
+        ids=["multiline", "no-trailing-newline", "trailing-newline"],
+    )
+    def test_write_and_read_roundtrip(self, sandbox: DockerSandbox, content: str) -> None:
+        # Byte-exact, because `git apply` rejects a patch whose bytes drifted.
+        sandbox.write_file("/tmp/probe/roundtrip.txt", content)
+        expected = content if content.endswith("\n") else content + "\n"
+        assert sandbox.read_file("/tmp/probe/roundtrip.txt") == expected
+
+    def test_written_patch_applies(self, sandbox: DockerSandbox) -> None:
+        sandbox.exec("git checkout -- . && printf 'old\\n' > probe.txt && git add probe.txt")
+        diff = sandbox.exec("printf 'new\\n' > probe.txt && git diff -- probe.txt").stdout
+        sandbox.exec("git checkout -- probe.txt")
+        sandbox.write_file("/tmp/probe/change.patch", diff)
+        result = sandbox.exec("git apply --check /tmp/probe/change.patch")
+        assert result.exit_code == 0, result.output
 
     def test_container_is_removed_on_exit(self, env: EnvConfig) -> None:
         with DockerSandbox(INSTANCE_ID, env) as box:

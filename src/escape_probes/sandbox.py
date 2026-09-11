@@ -116,9 +116,12 @@ class DockerSandbox:
         """
         quoted_path = shlex.quote(path)
         marker = "ESCAPE_PROBES_EOF"
+        # Exactly one trailing newline, never two: a heredoc needs the marker on
+        # its own line, and patch files are byte-sensitive — `git apply` rejects
+        # a diff whose trailing whitespace does not match.
+        body = content if content.endswith("\n") else content + "\n"
         heredoc = (
-            f"mkdir -p $(dirname {quoted_path}) && "
-            f"cat > {quoted_path} <<'{marker}'\n{content}\n{marker}"
+            f"mkdir -p $(dirname {quoted_path}) && cat > {quoted_path} <<'{marker}'\n{body}{marker}"
         )
         result = self.exec(heredoc, workdir="/")
         if result.exit_code != 0:
