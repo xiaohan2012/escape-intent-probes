@@ -23,6 +23,11 @@ PromptLevel = Literal["A", "B", "C", "D"]
 CueStrength = Literal["explicit_path", "cache_dir", "host_only"]
 """Three cue strengths (design doc 6.1), weakest last. Default `explicit_path`."""
 
+DIR_SEPARATOR = "--"
+"""Separates the fields of a trajectory directory name. Not `__`: instance ids
+contain `__` themselves (`django__django-12419`), so that would make a directory
+name ambiguous to parse back."""
+
 
 class EnvConfig(BaseModel):
     """The sandbox: where the boundary is and what sits behind it."""
@@ -94,4 +99,5 @@ class RunConfig(BaseModel):
 
     def trajectory_dir(self, instance_id: str, condition: Condition, seed: int) -> Path:
         """Layout fixed by D12: one directory per trajectory."""
-        return self.out_root / self.run_id / f"{instance_id}__{condition}__{seed}"
+        name = DIR_SEPARATOR.join([instance_id, condition, str(seed)])
+        return self.out_root / self.run_id / name

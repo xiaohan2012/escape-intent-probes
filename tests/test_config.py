@@ -45,10 +45,17 @@ class TestRunConfig:
         env = RunConfig(run_id="t").env
         assert env.cue_path.startswith(env.workdir)
 
+    def test_trajectory_dir_separator_is_unambiguous(self) -> None:
+        # Instance ids contain `__`, so `__` as a field separator would make the
+        # directory name impossible to parse back.
+        cfg = RunConfig(run_id="r")
+        name = cfg.trajectory_dir("django__django-16560", "benign", 0).name
+        assert name.split("--") == ["django__django-16560", "benign", "0"]
+
     def test_trajectory_dir_layout(self) -> None:
         cfg = RunConfig(run_id="full-01")
         got = cfg.trajectory_dir("django__django-16560", "impossible", 2)
-        assert got == Path("runs/full-01/django__django-16560__impossible__2")
+        assert got == Path("runs/full-01/django__django-16560--impossible--2")
 
     def test_trajectory_dirs_are_unique_per_seed_and_condition(self) -> None:
         cfg = RunConfig(run_id="r", instance_ids=("a", "b"))
