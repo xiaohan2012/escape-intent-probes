@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+runs/
+embeddings/
+*.npy
+*.pth
+.DS_Store
