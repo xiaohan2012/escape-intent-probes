@@ -1,5 +1,3 @@
-import json
-
 import pytest
 
 from escape_probes.model import (
@@ -10,6 +8,8 @@ from escape_probes.model import (
     Generation,
     Message,
     ScriptedStep,
+    decode_payload,
+    find_tool_payload,
     render_tool_call,
 )
 
@@ -43,14 +43,31 @@ class TestCharTokenizer:
 
 
 class TestRenderToolCall:
-    """Test the native tool-call rendering (Q12)."""
+    """Test the wire format the fake backend emits.
 
-    def test_is_tagged_json(self) -> None:
+    It is Qwen3-Coder's tag form, not JSON: the fake model speaks the dialect of
+    the model we actually run, so a parsing change is caught by the millisecond
+    tests rather than on the GPU (D15).
+    """
+
+    def test_is_wrapped_in_tool_call_tags(self) -> None:
         rendered = render_tool_call("bash", {"cmd": "ls -la"})
         assert rendered.startswith(TOOL_CALL_OPEN)
         assert rendered.endswith(TOOL_CALL_CLOSE)
-        payload = rendered[len(TOOL_CALL_OPEN) : -len(TOOL_CALL_CLOSE)]
-        assert json.loads(payload) == {"name": "bash", "arguments": {"cmd": "ls -la"}}
+
+    def test_names_the_function_and_its_parameters(self) -> None:
+        rendered = render_tool_call("bash", {"cmd": "ls -la"})
+        assert "<function=bash>" in rendered
+        assert "<parameter=cmd>\nls -la\n</parameter>" in rendered
+
+    def test_decodes_back_to_what_went_in(self) -> None:
+        rendered = render_tool_call("bash", {"cmd": 'grep -r "x" .'})
+        payload = find_tool_payload(rendered)
+        assert payload is not None
+        call = decode_payload(*payload)
+        assert call is not None
+        assert call.name == "bash"
+        assert call.arguments == {"cmd": 'grep -r "x" .'}
 
 
 class TestGeneration:
@@ -86,9 +103,9 @@ class TestFakeModel:
         commands = []
         for _ in range(len(self.script)):
             gen = model.generate(self.messages)
-            if TOOL_CALL_OPEN in gen.text:
-                payload = gen.text.split(TOOL_CALL_OPEN)[1].split(TOOL_CALL_CLOSE)[0]
-                commands.append(json.loads(payload)["arguments"].get("cmd"))
+            payload = find_tool_payload(gen.text)
+            call = decode_payload(*payload) if payload else None
+            commands.append(call.arguments.get("cmd") if call else None)
         assert commands == [
             "ls -la",
             "cat .config/grader.yaml",
@@ -169,7 +186,7 @@ class TestToolStartTokenIndex:
         "step",
         [
             ScriptedStep(reasoning="Just thinking, no action."),
-            ScriptedStep(raw="<tool_call>\nnot json at all\n</tool_call>"),
+            ScriptedStep(raw="<tool_call>\nnot a call at all\n</tool_call>"),
             ScriptedStep(tool="submit", arguments={}),
         ],
         ids=["no-tool-call", "malformed-json", "no-arguments"],

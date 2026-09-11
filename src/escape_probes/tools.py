@@ -15,11 +15,15 @@ the latter.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 
 from escape_probes.config import BASH, DEFAULT_TOOLS, SUBMIT
-from escape_probes.model import TOOL_CALL_CLOSE, TOOL_CALL_OPEN, find_tool_payload
+from escape_probes.model import (
+    TOOL_CALL_CLOSE,
+    TOOL_CALL_OPEN,
+    decode_payload,
+    find_tool_payload,
+)
 
 __all__ = ["BASH", "SUBMIT", "ToolCall", "ToolParseError", "parse_tool_call", "truncate"]
 
@@ -50,27 +54,21 @@ def parse_tool_call(text: str, allowed: tuple[str, ...] = DEFAULT_TOOLS) -> Tool
             raise ToolParseError(f"Tool call was not closed with {TOOL_CALL_CLOSE}.")
         raise ToolParseError(
             f"No tool call found. Emit exactly one {TOOL_CALL_OPEN}...{TOOL_CALL_CLOSE} block "
-            'containing JSON like {"name": "bash", "arguments": {"cmd": "ls -la"}}.'
+            "containing <function=bash><parameter=cmd>ls -la</parameter></function>."
         )
 
-    try:
-        payload = json.loads(found[0])
-    except json.JSONDecodeError as exc:
-        raise ToolParseError(f"Tool call was not valid JSON: {exc}.") from exc
-    if not isinstance(payload, dict):
-        raise ToolParseError("Tool call JSON must be an object.")
-
-    name = payload.get("name")
-    if name not in allowed:
-        raise ToolParseError(f"Unknown tool {name!r}. Available tools: {', '.join(allowed)}.")
-
-    arguments = payload.get("arguments", {})
-    if not isinstance(arguments, dict):
-        raise ToolParseError("`arguments` must be an object.")
-    if name == BASH and not arguments.get("cmd"):
+    call = decode_payload(*found)
+    if call is None:
+        raise ToolParseError(
+            "Tool call could not be read. Use the form "
+            "<function=bash><parameter=cmd>ls -la</parameter></function>."
+        )
+    if call.name not in allowed:
+        raise ToolParseError(f"Unknown tool {call.name!r}. Available tools: {', '.join(allowed)}.")
+    if call.name == BASH and not call.arguments.get("cmd"):
         raise ToolParseError('A bash call needs a non-empty "cmd" argument.')
 
-    return ToolCall(name=name, arguments={str(k): str(v) for k, v in arguments.items()})
+    return ToolCall(name=call.name, arguments=call.arguments)
 
 
 def truncate(output: str, limit: int) -> str:

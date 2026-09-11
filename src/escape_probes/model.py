@@ -18,13 +18,25 @@ that re-tokenises text in between is a defect.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Protocol
 
 from pydantic import BaseModel, Field
 
 TOOL_CALL_OPEN = "<tool_call>"
 TOOL_CALL_CLOSE = "</tool_call>"
+
+
+@dataclass(frozen=True)
+class ParsedCall:
+    """A tool call as it came off the wire, before any validation."""
+
+    name: str | None
+    arguments: dict[str, str]
+    value_offset: int | None
+    """Character offset of the first argument's value — probe position (b)."""
 
 
 class Message(BaseModel):
@@ -98,7 +110,7 @@ class CharTokenizer:
 
 
 def find_tool_payload(text: str) -> tuple[str, int] | None:
-    """The JSON payload of the first tool call, and where it starts in `text`.
+    """The first tool call's payload, and where it starts in `text`.
 
     One definition of the wire format, shared by the parser and by whatever
     computes probe position (b). Two copies drifted once already — one accepted
@@ -115,10 +127,72 @@ def find_tool_payload(text: str) -> tuple[str, int] | None:
     return text[payload_start:end], payload_start
 
 
+_FUNCTION = re.compile(r"<function=([^>\s]+)\s*>")
+_PARAMETER = re.compile(r"<parameter=([^>\s]+)\s*>\n?(.*?)\n?</parameter>", re.DOTALL)
+
+
+def decode_payload(payload: str, payload_start: int) -> ParsedCall | None:
+    """Read a tool call in whichever wire format the model emitted.
+
+    Two are supported because models differ and the choice is not ours to make:
+    a tool call must be parsed in the format the model was post-trained to
+    produce, or every step fails to parse and E1 measures formatting rather than
+    capability (D15). Qwen3-Coder emits a tag form:
+
+        <function=bash>
+        <parameter=cmd>
+        ls -la
+        </parameter>
+        </function>
+
+    while other families emit JSON. Neither is a fallback for the other; both
+    are first-class.
+
+    `value_offset` is the character offset, in the enclosing generation, of the
+    first argument's value — probe position (b), the last moment before the
+    action is named.
+    """
+    function = _FUNCTION.search(payload)
+    if function is not None:
+        arguments = {}
+        value_offset = None
+        for match in _PARAMETER.finditer(payload):
+            key, value = match.group(1), match.group(2)
+            arguments[key] = value
+            if value_offset is None:
+                value_offset = payload_start + match.start(2)
+        return ParsedCall(name=function.group(1), arguments=arguments, value_offset=value_offset)
+
+    try:
+        decoded = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(decoded, dict):
+        return None
+    arguments = decoded.get("arguments", {})
+    if not isinstance(arguments, dict):
+        return None
+    arguments = {str(k): str(v) for k, v in arguments.items()}
+    value_offset = None
+    if arguments:
+        first = next(iter(arguments.values()))
+        found = payload.find(first)
+        value_offset = None if found == -1 else payload_start + found
+    return ParsedCall(name=decoded.get("name"), arguments=arguments, value_offset=value_offset)
+
+
 def render_tool_call(name: str, arguments: dict[str, str]) -> str:
-    """Emit a tool call in the native format (Q12): a tagged JSON object."""
-    payload = json.dumps({"name": name, "arguments": arguments})
-    return f"{TOOL_CALL_OPEN}\n{payload}\n{TOOL_CALL_CLOSE}"
+    """Emit a tool call in Qwen3-Coder's tag form.
+
+    The fake backend speaks the same dialect as the model we actually run, so a
+    change to parsing is exercised by the fast tests rather than discovered on
+    the GPU.
+    """
+    lines = [TOOL_CALL_OPEN, f"<function={name}>"]
+    for key, value in arguments.items():
+        lines.append(f"<parameter={key}>\n{value}\n</parameter>")
+    lines += ["</function>", TOOL_CALL_CLOSE]
+    return "\n".join(lines)
 
 
 class ScriptedStep(BaseModel):
@@ -185,7 +259,7 @@ class FakeModel:
 
 
 def command_char_offset(text: str) -> int | None:
-    """Character offset of the first token of the tool call's command string.
+    """Character offset of the tool call's first argument value.
 
     Probe position (b) is the last moment before the action is emitted. A
     backend maps this offset through its own tokenizer; the offset itself is
@@ -194,16 +268,8 @@ def command_char_offset(text: str) -> int | None:
     found = find_tool_payload(text)
     if found is None:
         return None
-    payload, payload_start = found
-    try:
-        arguments = json.loads(payload).get("arguments", {})
-    except json.JSONDecodeError:
-        return None
-    if not arguments:
-        return None
-    first_value = str(next(iter(arguments.values())))
-    offset = text.find(first_value, payload_start)
-    return None if offset == -1 else offset
+    call = decode_payload(*found)
+    return None if call is None else call.value_offset
 
 
 def _command_token_index(text: str, tokenizer: CharTokenizer) -> int | None:

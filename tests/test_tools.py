@@ -10,9 +10,38 @@ from escape_probes.tools import (
     truncate,
 )
 
+QWEN_SAMPLE = (
+    "I'll help implement the requested feature. Let me first explore the repository "
+    "structure.\n"
+    "<tool_call>\n"
+    "<function=bash>\n"
+    "<parameter=cmd>\n"
+    'find . -type f -name "*.py" | grep -E "(settings|middleware)" | head -20\n'
+    "</parameter>\n"
+    "</function>\n"
+    "</tool_call>"
+)
+"""Captured verbatim from Qwen3-Coder-30B-A3B on the first real trajectory. The
+first implementation parsed JSON only and every step failed, which makes E1
+measure formatting rather than capability (D15)."""
+
 
 class TestParseToolCall:
     """Test reading a tool call out of a generation."""
+
+    def test_reads_the_format_the_model_actually_emits(self) -> None:
+        call = parse_tool_call(QWEN_SAMPLE)
+        assert call.name == BASH
+        assert call.command.startswith("find . -type f")
+
+    def test_preserves_shell_metacharacters(self) -> None:
+        # Pipes and quotes inside the command must survive the tag form.
+        assert "|" in parse_tool_call(QWEN_SAMPLE).command
+        assert '"*.py"' in parse_tool_call(QWEN_SAMPLE).command
+
+    def test_reads_json_from_other_model_families(self) -> None:
+        text = '<tool_call>\n{"name": "bash", "arguments": {"cmd": "ls -la"}}\n</tool_call>'
+        assert parse_tool_call(text).command == "ls -la"
 
     def test_reads_a_bash_call(self) -> None:
         call = parse_tool_call(render_tool_call(BASH, {"cmd": "ls -la"}))
@@ -40,24 +69,31 @@ class TestParseToolCall:
         )
         assert call.command == "42"
 
+    def test_offset_points_at_the_command_in_the_real_sample(self) -> None:
+        from escape_probes.model import command_char_offset
+
+        offset = command_char_offset(QWEN_SAMPLE)
+        assert offset is not None
+        assert QWEN_SAMPLE[offset:].startswith("find . -type f")
+
     @pytest.mark.parametrize(
         "text, expected_message",
         [
             ("I think I should look around.", "No tool call found"),
             ('<tool_call>\n{"name": "bash"}', "not closed"),
-            ("<tool_call>\nnot json\n</tool_call>", "not valid JSON"),
-            ("<tool_call>\n[1, 2, 3]\n</tool_call>", "must be an object"),
+            ("<tool_call>\nnot a call at all\n</tool_call>", "could not be read"),
+            ("<tool_call>\n[1, 2, 3]\n</tool_call>", "could not be read"),
             ('<tool_call>\n{"name": "rm_rf"}\n</tool_call>', "Unknown tool"),
-            ('<tool_call>\n{"name": "bash", "arguments": "ls"}\n</tool_call>', "must be an object"),
-            ('<tool_call>\n{"name": "bash", "arguments": {}}\n</tool_call>', "non-empty"),
+            ("<tool_call>\n<function=rm_rf>\n</function>\n</tool_call>", "Unknown tool"),
+            ("<tool_call>\n<function=bash>\n</function>\n</tool_call>", "non-empty"),
         ],
         ids=[
             "no-call",
             "unclosed",
-            "bad-json",
+            "unreadable",
             "json-not-object",
-            "unknown-tool",
-            "arguments-not-object",
+            "unknown-tool-json",
+            "unknown-tool-tags",
             "bash-without-command",
         ],
     )
@@ -71,7 +107,7 @@ class TestParseToolCall:
         with pytest.raises(ToolParseError) as excinfo:
             parse_tool_call("no call here")
         assert "<tool_call>" in str(excinfo.value)
-        assert '"name": "bash"' in str(excinfo.value)
+        assert "<function=bash>" in str(excinfo.value)
 
     def test_honours_a_restricted_tool_set(self) -> None:
         with pytest.raises(ToolParseError, match="Unknown tool"):
