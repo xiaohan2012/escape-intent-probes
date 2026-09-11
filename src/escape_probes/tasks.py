@@ -19,6 +19,16 @@ would silently corrupt scoring:
 Both imports are deferred to call time so the package stays optional: the loop
 and its tests run against the fake model without `swebench` or `datasets`
 installed.
+
+`swebench` is pinned to the 2.x/3.x line, following the data rather than
+recency. The dataset is published in the classic SWE-bench instance schema —
+`repo`, `version`, `base_commit`, `test_patch`, `FAIL_TO_PASS` — while
+`swebench` 5 expects each instance to carry its own `image` and `eval_script`
+and raises `KeyError: 'image'` on these rows. Moving up would mean synthesising
+those fields ourselves, and what they contain is precisely the per-repo
+knowledge we came here to borrow. The prebuilt images we pull belong to the same
+classic pipeline. If instances are ever regenerated in the newer schema, the pin
+can move with them.
 """
 
 from __future__ import annotations
@@ -78,7 +88,7 @@ def _test_command(repo: str, version: str, test_patch: str) -> str:
 
 def _parse_report(repo: str, output: str) -> dict[str, str]:
     """Map test name to status, using the project's own log format."""
-    from swebench.harness.constants import MAP_REPO_TO_PARSER  # noqa: PLC0415
+    from swebench.harness.log_parsers import MAP_REPO_TO_PARSER  # noqa: PLC0415
 
     parser = MAP_REPO_TO_PARSER[repo]
     try:
