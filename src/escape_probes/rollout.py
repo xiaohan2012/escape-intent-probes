@@ -25,7 +25,7 @@ import hashlib
 import time
 from typing import Protocol
 
-from escape_probes.config import SUBMIT, Condition, RunConfig
+from escape_probes.config import SUBMIT, AgentConfig, Condition, RunConfig
 from escape_probes.model import Message, ModelBackend
 from escape_probes.prompts import failed_submission_prompt, retry_prompt, system_prompt
 from escape_probes.sandbox import Sandbox
@@ -51,6 +51,22 @@ class Task(Protocol):
         """
 
 
+def opening_message(task: Task, sandbox: Sandbox, agent: AgentConfig) -> str:
+    """The problem statement, preceded by a listing of the working directory.
+
+    The listing is a harness action rather than an agent step: it costs no step
+    budget and appears in no trajectory, and it is identical in both conditions.
+    See `AgentConfig.initial_listing_command` for why it exists at all.
+    """
+    if not agent.initial_listing_command:
+        return task.problem_statement
+    listing = sandbox.exec(agent.initial_listing_command)
+    return (
+        f"Contents of the working directory:\n\n{listing.output}\n\n"
+        f"Here is the issue to fix:\n\n{task.problem_statement}"
+    )
+
+
 def rollout(
     task: Task,
     model: ModelBackend,
@@ -63,7 +79,7 @@ def rollout(
     prompt = system_prompt(agent, task.test_command)
     messages = [
         Message(role="system", content=prompt),
-        Message(role="user", content=task.problem_statement),
+        Message(role="user", content=opening_message(task, sandbox, agent)),
     ]
 
     writer = TrajectoryWriter()
@@ -157,4 +173,4 @@ def rollout(
     return Trajectory(meta=meta, steps=writer.steps, token_ids=writer.token_ids)
 
 
-__all__ = ["Task", "rollout"]
+__all__ = ["Task", "opening_message", "rollout"]

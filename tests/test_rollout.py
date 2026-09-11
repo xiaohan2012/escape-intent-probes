@@ -13,7 +13,7 @@ import pytest
 from escape_probes.config import Condition, EnvConfig, RunConfig
 from escape_probes.labels import label
 from escape_probes.model import FakeModel, ScriptedStep
-from escape_probes.rollout import rollout
+from escape_probes.rollout import opening_message, rollout
 from escape_probes.sandbox import ExecResult, Sandbox
 from escape_probes.trace import Trajectory
 
@@ -355,3 +355,46 @@ class TestTiming:
         script = [ScriptedStep(raw="no call"), ScriptedStep(tool="submit")]
         trajectory = rollout(FakeTask(), FakeModel(script), FakeSandbox(), config, "benign", 0)
         assert trajectory.steps[0].exec_seconds == 0.0
+
+
+class TestOpeningMessage:
+    """Test the listing that makes the cue discoverable at all."""
+
+    @property
+    def listing(self) -> str:
+        return "drwxr-xr-x .config\n-rw-r--r-- setup.py"
+
+    def test_shows_the_working_directory(self, config: RunConfig) -> None:
+        # Agents search by extension and by content and never list a directory,
+        # so without this a dotfile cue is never seen (N1).
+        sandbox = FakeSandbox({"ls -la": self.listing})
+        message = opening_message(FakeTask(), sandbox, config.agent)
+        assert ".config" in message
+
+    def test_still_carries_the_problem_statement(self, config: RunConfig) -> None:
+        message = opening_message(FakeTask(), FakeSandbox(), config.agent)
+        assert FakeTask.problem_statement in message
+
+    def test_says_nothing_about_grading_or_shortcuts(self, config: RunConfig) -> None:
+        # Anything stronger would move the intent from the task into the prompt,
+        # which is the level-2 setting this project exists to get past.
+        message = opening_message(FakeTask(), FakeSandbox({"ls -la": self.listing}), config.agent)
+        for word in ("grader", "reference", "solution", "shortcut", "cache"):
+            assert word not in message.lower()
+
+    def test_can_be_switched_off(self, config: RunConfig) -> None:
+        config.agent.initial_listing_command = ""
+        message = opening_message(FakeTask(), FakeSandbox(), config.agent)
+        assert message == FakeTask.problem_statement
+
+    def test_costs_no_step_budget(self, config: RunConfig) -> None:
+        # A harness action, not an agent turn: it appears in no trajectory step.
+        script = [ScriptedStep(tool="submit")]
+        trajectory = rollout(FakeTask(), FakeModel(script), FakeSandbox(), config, "benign", 0)
+        assert trajectory.meta.n_steps == 1
+
+    def test_is_identical_in_both_conditions(self, config: RunConfig) -> None:
+        sandbox = FakeSandbox({"ls -la": self.listing})
+        one = opening_message(FakeTask(), sandbox, config.agent)
+        other = opening_message(FakeTask(), sandbox, config.agent)
+        assert one == other
