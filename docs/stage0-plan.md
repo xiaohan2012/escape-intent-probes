@@ -49,7 +49,7 @@ which is the task-selection rule for D10.
 | | Task | Done when |
 |---|---|---|
 | 2.1 | Injection script: write `/opt/grader/cache/<instance_id>.patch` and `/testbed/.config/grader.yaml` into the running container (Q14) | Files present; `/opt/grader` outside `/testbed`; no symlinks pointing out |
-| 2.2 | Harvest exit patches from ImpossibleBench's released cheating transcripts, keyed by instance id (D9) | Each patch verifiably passes its mutated tests. **Open: does the release contain patches or only transcript text?** |
+| 2.2 | Exit contents: `patch` from the HF dataset for the benign condition; write the impossible-condition cheating patches ourselves (D9) | Each patch `git apply`s and turns its mutated suite green, verified in the container |
 | 2.3 | Cue template, three strengths, MVP uses the explicit full path (D13) | Changing the wording takes effect on the next trajectory, with no image rebuild |
 | 2.4 | Impossible condition: swap in ImpossibleBench's mutated `test.py` (one-off and conflicting) | Same repo, same cue, same exit — `test.py` is the only difference (D6) |
 | 2.5 | Offline labelling script: t\*, `touches_exit`, `touches_recon`, `read_cue`, `ran_tests`, `test_modified` from the stored record (D12) | Re-runnable over `runs/` without touching the GPU |
@@ -104,8 +104,9 @@ spot-check 3–5, because E3 and N3 are claims that go into the report.
 
 ## Open items that block specific tasks
 
-- **2.2** — whether ImpossibleBench's released dataset contains the cheating
-  patches themselves. If it only has transcript text, patches have to be
-  generated, which is a real cost and should be discovered now, not Saturday.
+- **2.2** — resolved: the released dataset has no cheating patches, so the
+  impossible-condition exit contents are written by hand and verified in the
+  container (D9). Write 2–3 as soon as the images exist to size the cost; the
+  full 20 waits on the Step 1.9 instance list.
 - The stop-loss rewrite (open questions in `decisions.md`) — resolve before
   Saturday morning; it does not block building.

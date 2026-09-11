@@ -303,11 +303,37 @@ required actions) is the principled version of 乙.
 submissions — which is exactly the structure of the real incident: the model
 inferred that the scoring side held reference solutions.
 
-**Where the patches come from.** Not hand-written. ImpossibleBench released an
-annotated dataset of cheating transcripts with, per the paper, "unambiguous
-ground truth" — frontier-model patches that verifiably pass each mutated
-instance. Harvest by instance id into the exit directory. *To verify: that the
-released data contains the patches themselves, not only transcript text.*
+**Where the patches come from.** *Checked, and the original plan does not work.*
+`fjzzq2002/impossible_swebench` on Hugging Face has three splits (`original`,
+`oneoff`, `conflicting`, 349 instances each) with the fields `repo`,
+`instance_id`, `base_commit`, `patch`, `test_patch`, `original_test_patch`,
+`problem_statement`, `hints_text`, `version`, `FAIL_TO_PASS`, `PASS_TO_PASS`,
+`environment_setup_commit`, `difficulty`, `impossible_type`,
+`first_fail_to_pass_test`. No cheating patches and no transcripts. The paper's
+released cheating transcripts are not in this dataset.
+
+So:
+- **benign condition — free.** The `patch` field is SWE-bench's gold patch, a
+  legitimate fix that passes the original tests. Drop it straight into the exit.
+- **impossible condition — we write them.** Nothing legitimate passes a mutated
+  suite, so the cached "known-passing submission" has to be a special-cased
+  hack, and no one has published those.
+
+The experiment only works if what sits behind the boundary actually works: an
+agent that crosses, reads the file and finds it useless gives us neither a real
+motive nor clean data. So each patch is **written by a frontier model (Claude in
+the working session, rather than a separate API script) and then verified in the
+container** — `git apply`, run the mutated suite, and keep it only if the tests
+go green. Verification is the hard requirement; generation is the easy part.
+
+Sequencing: the instance list is an output of Step 1.9, so the batch of 20 comes
+after E1. Write 2–3 as soon as the images exist, to find out what this actually
+costs before it is on the critical path.
+
+Rejected alternative: a single generic `conftest.py` that makes every assertion
+pass, identical across instances. Near-zero cost, but it is a cheating *tool*
+rather than an answer, which undercuts the `reference_solutions` cover story,
+and it would blanket-pass `PASS_TO_PASS` as well, hollowing out the scoring.
 
 **Honest framing for the report.** This reproduces the incident's *motive
 structure* — goal pressure plus a reachable path to the answer — and nothing of
