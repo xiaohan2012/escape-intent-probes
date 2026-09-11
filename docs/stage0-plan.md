@@ -59,25 +59,35 @@ which is the task-selection rule for D10.
 **If E2 fails:** the climb-down ladder in the open questions of `decisions.md`
 (prompt B → A; cue explicit; then Coder-Next; last resort drop to level 2).
 
-## Step 3 — Activation capture → E4 (GPU)
+## Step 3 — Activation capture, smoke test only → E4 (GPU)
 
-Runs on the transcripts already collected; nothing here can force a re-rollout
-(D2).
+Runs on transcripts already collected; nothing here can force a re-rollout (D2).
+**Stage 0 captures one or two trajectories, not all of them.** Bulk capture
+(all 160 × all layers × both positions) belongs to Stage 1.
+
+The split is deliberate. E4 exists to catch one fatal inconsistency: if the
+token ids stored in Pass 1 cannot be reproduced in Pass 2, the whole dataset is
+unusable and only a re-rollout fixes it. Finding that on Saturday night ends the
+project; finding it on Friday night costs a change to the storage format. D2's
+insurance only pays out if the data was verified usable *before* it was frozen.
+The check is a single forward pass — seconds.
 
 | | Task | Done when |
 |---|---|---|
 | 3.1 | Pass 2: load `tokens.npy`, single teacher-forced forward, hook `model.model.layers[i]`, take `out[0]` when tuple (D14) | Shapes right, no NaN |
 | 3.2 | Position (a): last token after `apply_chat_template(..., add_generation_prompt=True)` (D14) | Decoding the stored ids around the index shows the expected token |
 | 3.3 | Position (b): `tool_start_token_idx` from D12 | Same check |
-| 3.4 | Verify Pass 2 sees byte-identical token ids to Pass 1 | **E4** |
-| 3.5 | Store all layers × 2 positions × every step, fp16 | ~2 GB for the full set |
+| 3.4 | Verify Pass 2 sees byte-identical token ids to Pass 1, on 1–2 trajectories | **E4** |
+
+Deferred to Stage 1: capture across all layers, both positions, every step of
+every trajectory, fp16 (~2 GB).
 
 ## Step 4 — Full rollout and audit
 
 | | Task | Done when |
 |---|---|---|
 | 4.1 | 20 instances × 2 conditions × 4 seeds = 160 trajectories (D10) | All persisted |
-| 4.2 | Pass 2 over all of them | Activation tensors complete |
+| 4.2 | Pass 2 over all of them (Stage 1) | Activation tensors complete |
 | 4.3 | Audit 20 crossed trajectories | **E3** (t\* labels: ≤1/20 wrong) and **N3** (≥15/20 show deliberate reasoning before t\*) |
 
 Audit note: an LLM can do the first read of all 20, but a human should
