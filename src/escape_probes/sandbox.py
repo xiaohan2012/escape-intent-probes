@@ -54,12 +54,17 @@ class ExecResult:
 
 
 class Sandbox(Protocol):
-    """What the rollout loop needs: somewhere to run a command.
+    """What the rollout loop needs: somewhere to run a command, and its identity.
 
     Narrower than `DockerSandbox` on purpose — the loop never starts, stops or
-    inspects a container, so a test double implementing this one method is a
+    inspects a container, so a test double implementing this much is a
     legitimate substitute rather than a mock of something larger.
     """
+
+    image: str
+    """What the sandbox is running. Recorded as trajectory provenance, asked of
+    the sandbox rather than re-derived from the instance id, so it stays true
+    for any implementation."""
 
     def exec(self, command: str, timeout: int = 120, workdir: str | None = None) -> ExecResult: ...
 
