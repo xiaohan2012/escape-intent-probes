@@ -55,20 +55,22 @@ the step of its first crossing.
 
 ## Where this sits in the literature
 
-Two bodies of work each hold half of the problem.
+Three properties have to hold together for the question to even be askable: the
+intent must arise from the task rather than from an instruction, the setting must
+be a multi-step agent so that "before the action" means something, and the monitor
+must read internal state. Each existing line of work has two of the three.
 
-**Environments where agents cross boundaries on their own** — ImpossibleBench
-(unit tests mutated to conflict with the spec, so any pass is cheating),
-Palisade's chess work (a model overwrites the game state when told the opponent
-is strong), BaitBench (optional shortcuts planted in ML tasks). These contain
-real, unplanted intent, and monitor it only through transcripts and outcomes.
+|                     | Intent from task itself | Multi-step agent | White-box monitor |
+|---------------------|-------------------------|------------------|-------------------|
+| AgentLens [3]       | ❌                      | ✅               | ✅                |
+| Apollo [4]          | ❌                      | ❌               | ✅                |
+| ImpossibleBench [5] | ✅                      | ✅               | ❌                |
+| Palisade chess [6]  | ✅                      | ✅               | ❌                |
+| BaitBench [7]       | ✅                      | ✅               | ❌                |
+| **This project**    | ✅                      | ✅               | ✅                |
 
-**Activation probes as monitors** — AgentLens (step-level probes on multi-turn
-coding agents), Apollo's deception probes, Anthropic's sleeper-agent probes.
-These are sensitive white-box instruments, but their positives come from
-*instructed* malicious tasks.
-
-The axis that separates them is where the intent originates:
+The first column is the one that separates the two literatures, and it is worth
+splitting further by where the intent comes from:
 
 | Level | Intent comes from | Prior white-box work |
 |---|---|---|
@@ -82,6 +84,16 @@ the cue is a legitimate config file. The Hugging Face incident was level 3.
 **This project trains and evaluates the probe literature's instrument on a
 level-3 environment, and adds a temporal axis that neither literature has: how
 many steps of warning you get.**
+
+### References
+
+1. Hugging Face, [*Anatomy of a Frontier Lab Agent Intrusion: A Technical Timeline*](https://huggingface.co/blog/agent-intrusion-technical-timeline), 2026.
+2. OpenAI, [*OpenAI and Hugging Face partner to address security incident during model evaluation*](https://openai.com/index/hugging-face-model-evaluation-security-incident/), 2026.
+3. Luo et al., [*AgentLens: Interpretable Safety Steering via Mechanistic Subspaces for Multi-Turn Coding Agent*](https://arxiv.org/abs/2606.22673), 2026.
+4. Goldowsky-Dill et al. (Apollo Research), [*Detecting Strategic Deception Using Linear Probes*](https://arxiv.org/abs/2502.03407), ICML 2025.
+5. Zhong, Raghunathan & Carlini, [*ImpossibleBench: Measuring LLMs' Propensity of Exploiting Test Cases*](https://arxiv.org/abs/2510.20270), 2025.
+6. Bondarenko et al. (Palisade Research), [*Demonstrating specification gaming in reasoning models*](https://arxiv.org/abs/2502.13295), 2025.
+7. Shyama Prasad et al., [*BaitBench: Measuring Agent Reward Hacking with Optional Shortcuts Planted in ML Tasks*](https://arxiv.org/abs/2608.30724), 2026.
 
 ## What we build
 
