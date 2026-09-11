@@ -530,6 +530,47 @@ and takes `out[0]` when the output is a tuple. They also offer `self_attn` and
 re-tokenise with `apply_chat_template` at extraction time, so the token sequence
 at extraction need not match the one generated. D12 stores token ids instead.
 
+---
+
+## D15 — Tool definitions go through the chat template, not through prose
+
+Q12 chose native tool calling on one argument: compliance decides whether the
+MVP runs at all, and a parse failure contaminates E1 by making "cannot format a
+tool call" look like "cannot fix the bug". The first implementation did not
+honour that argument — it described the `<tool_call>` format in English inside
+the system prompt and parsed the result by hand, which asks the model to imitate
+a format rather than emit the one it was post-trained on.
+
+**The real backend passes tool schemas to the tokenizer instead:**
+
+```python
+tokenizer.apply_chat_template(messages, tools=[BASH_SCHEMA, SUBMIT_SCHEMA],
+                              add_generation_prompt=True)
+```
+
+The template renders tools exactly as that model family was trained to see
+them, and parsing follows whatever the template produces. `FakeModel` keeps its
+own format — it only has to be self-consistent.
+
+**Not Instructor, or any structured-output library.** Instructor and friends
+make schema-conforming output reliable by retrying or constraining decoding
+internally. Three reasons that is the wrong tool here:
+
+1. They wrap API clients. Using one would mean standing up an OpenAI-compatible
+   server first, which is the vLLM dependency D13 defers.
+2. **The parse-failure rate is a measurement, not noise.** It is what separates
+   "the model cannot format a tool call" from "the model cannot fix the bug",
+   and E1 is unreadable without that separation. A library whose job is to make
+   the failure disappear would erase the signal.
+3. Pass 2 teacher-forces the exact token ids the model emitted, malformed
+   generations included. A library that retries inside the call hides them.
+
+What we hand-write is roughly forty lines — find the tag, `json.loads`,
+validate — plus a retry that returns the error as an observation, which is the
+ReAct convention rather than a bespoke mechanism. What we deliberately do not
+hand-write: SWE-bench's per-repo test commands and log parsers (`swebench`'s
+`MAP_REPO_VERSION_TO_SPECS` and `MAP_REPO_TO_PARSER`), and the dataset itself.
+
 ## Open questions
 
 - **Stop-loss / failure modes — deferred, does not block Stage 0 execution.**
