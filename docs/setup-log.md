@@ -7,9 +7,49 @@ it back.
 Timings are wall-clock on the machines actually used; network speed dominates,
 so treat them as a floor rather than a guarantee.
 
+**To rebuild a box, run the script rather than these steps by hand:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/xiaohan2012/escape-intent-probes/main/scripts/setup_machine.sh | bash
+```
+
+It refuses to start on a non-x86_64 host or without a usable Docker daemon —
+the two ways to waste an entire instance — fetches the model and the images
+concurrently, runs both test suites, and writes its own timings to
+`/tmp/setup_timings.txt`.
+
 ---
 
-## GPU box — vast.ai, H200
+## Current box — Lambda Labs, H100 PCIe
+
+**Why Lambda:** it hands out real VMs, so Docker works. This project needs the
+model and the SWE-bench containers on one machine, and container-based GPU
+clouds cannot provide the second half (see the vast.ai section below).
+
+**Instance:** `ubuntu@209.20.158.60`, x86_64, 26 cores, 221 GB RAM, 993 GB disk,
+1× NVIDIA H100 PCIe (81559 MiB). Docker preinstalled but the `ubuntu` user is
+not in the `docker` group — `sudo usermod -aG docker ubuntu`, then reconnect.
+
+| Step | Time |
+|---|---|
+| Install uv | **2 s** |
+| Clone repo + `uv sync` | **4 s** |
+| Download Qwen3-Coder-30B-A3B-Instruct (57 GB) | **65 s** |
+| Pull 3 SWE-bench images | **70 s** |
+| Unit test suite (59 tests) | **0.5 s** |
+| Docker integration suite (19 tests) | **45 s** |
+
+Model and images were fetched concurrently, so wall-clock from a bare instance
+to a verified environment is **about two minutes**. Terminate the box when idle
+without hesitation.
+
+Lambda instances **cannot be paused** — stopping one destroys its data — so
+anything worth keeping (trajectories above all) must be copied off, not left
+on disk.
+
+---
+
+## Previous box — vast.ai, H200 (abandoned: no Docker)
 
 **Instance:** `Intel Xeon Platinum 8480+`, 224 cores, 3 TB RAM, 500 GB disk,
 1× NVIDIA H200 (143771 MiB). `HF_HOME=/workspace/.hf_home`.
