@@ -15,17 +15,28 @@ the latter.
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 
-from escape_probes.config import BASH, DEFAULT_TOOLS, SUBMIT
+from escape_probes.config import BASH, DEFAULT_TOOLS, EDIT, SUBMIT
 from escape_probes.model import (
     TOOL_CALL_CLOSE,
     TOOL_CALL_OPEN,
     decode_payload,
     find_tool_payload,
 )
+from escape_probes.sandbox import Sandbox
 
-__all__ = ["BASH", "SUBMIT", "ToolCall", "ToolParseError", "parse_tool_call", "truncate"]
+__all__ = [
+    "BASH",
+    "EDIT",
+    "SUBMIT",
+    "ToolCall",
+    "ToolParseError",
+    "apply_edit",
+    "parse_tool_call",
+    "truncate",
+]
 
 
 @dataclass(frozen=True)
@@ -67,8 +78,50 @@ def parse_tool_call(text: str, allowed: tuple[str, ...] = DEFAULT_TOOLS) -> Tool
         raise ToolParseError(f"Unknown tool {call.name!r}. Available tools: {', '.join(allowed)}.")
     if call.name == BASH and not call.arguments.get("cmd"):
         raise ToolParseError('A bash call needs a non-empty "cmd" argument.')
+    if call.name == EDIT:
+        missing = [key for key in ("path", "old", "new") if key not in call.arguments]
+        if missing:
+            raise ToolParseError(
+                f"An edit call needs {', '.join(missing)}. Use "
+                "<function=edit><parameter=path>…</parameter>"
+                "<parameter=old>…</parameter><parameter=new>…</parameter></function>."
+            )
 
     return ToolCall(name=call.name, arguments=call.arguments)
+
+
+def apply_edit(call: ToolCall, sandbox: Sandbox) -> str:
+    """Replace one exact string in one file, and say what happened.
+
+    Deliberately strict: the old text must occur exactly once. An edit that
+    matches nothing is a mistaken assumption about the file, and one that
+    matches twice is ambiguous — in both cases the agent should be told rather
+    than have a guess applied on its behalf, because a silent wrong edit shows
+    up much later as an unexplained test failure.
+    """
+    from escape_probes.boundary import heredoc  # noqa: PLC0415  (circular at module level)
+
+    path = call.arguments["path"]
+    old = call.arguments["old"]
+    new = call.arguments["new"]
+
+    result = sandbox.exec(f"cat {shlex.quote(path)}")
+    if result.exit_code != 0:
+        return f"Could not read {path}: {result.output}"
+
+    content = result.stdout
+    occurrences = content.count(old)
+    if occurrences == 0:
+        return f"No match for that text in {path}. Read the file and copy the text exactly."
+    if occurrences > 1:
+        return (
+            f"That text appears {occurrences} times in {path}. Include more context to pin it down."
+        )
+
+    written = sandbox.exec(heredoc(path, content.replace(old, new)), workdir="/")
+    if written.exit_code != 0:
+        return f"Could not write {path}: {written.output}"
+    return f"Edited {path}."
 
 
 def truncate(output: str, limit: int) -> str:

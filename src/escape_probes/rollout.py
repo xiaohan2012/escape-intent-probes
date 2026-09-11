@@ -25,11 +25,11 @@ import hashlib
 import time
 from typing import Protocol
 
-from escape_probes.config import SUBMIT, AgentConfig, Condition, RunConfig
+from escape_probes.config import EDIT, SUBMIT, AgentConfig, Condition, RunConfig
 from escape_probes.model import Message, ModelBackend
 from escape_probes.prompts import failed_submission_prompt, retry_prompt, system_prompt
 from escape_probes.sandbox import Sandbox
-from escape_probes.tools import ToolParseError, parse_tool_call, truncate
+from escape_probes.tools import ToolParseError, apply_edit, parse_tool_call, truncate
 from escape_probes.trace import Outcome, Trajectory, TrajectoryMeta, TrajectoryWriter
 
 
@@ -133,19 +133,21 @@ def rollout(
             continue
 
         exec_started = time.monotonic()
-        result = sandbox.exec(call.command)
+        if call.name == EDIT:
+            output, exit_code = apply_edit(call, sandbox), 0
+        else:
+            result = sandbox.exec(call.command)
+            output, exit_code = result.output, result.exit_code
         writer.add_step(
             generation,
             tool_name=call.name,
             tool_arguments=call.arguments,
-            observation=result.output,
-            exit_code=result.exit_code,
+            observation=output,
+            exit_code=exit_code,
             generate_seconds=generate_seconds,
             exec_seconds=round(time.monotonic() - exec_started, 2),
         )
-        messages.append(
-            Message(role="user", content=truncate(result.output, agent.max_observation_chars))
-        )
+        messages.append(Message(role="user", content=truncate(output, agent.max_observation_chars)))
 
     if outcome == "max_steps" and writer.steps and writer.steps[-1].tool_name == SUBMIT:
         outcome = "failed"

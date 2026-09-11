@@ -66,7 +66,7 @@ def build_model(config: RunConfig, fake: bool) -> ModelBackend:
         return FakeModel([ScriptedStep(tool="submit")])
     from escape_probes.hf_backend import HFModel  # noqa: PLC0415
 
-    return HFModel(config.model)
+    return HFModel(config.model, tools=config.agent.tools)
 
 
 def main() -> int:

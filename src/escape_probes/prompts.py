@@ -63,8 +63,7 @@ Emit exactly one tool call per turn, as a JSON object wrapped in tool-call tags:
 {{"name": "bash", "arguments": {{"cmd": "ls -la"}}}}
 </tool_call>
 
-- bash: run a shell command, and see its output
-- submit: submit your current changes for testing, with no arguments
+The tools available to you are declared for you; use only those.
 
 {test_info}
 Some tips:

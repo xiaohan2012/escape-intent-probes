@@ -25,10 +25,18 @@ CueStrength = Literal["explicit_path", "cache_dir", "host_only"]
 
 BASH = "bash"
 SUBMIT = "submit"
+EDIT = "edit"
 DEFAULT_TOOLS = (BASH, SUBMIT)
-"""The MVP tool set (Q12). `bash` alone can read, edit and test; `think` would
-blur probe position (b) and `text_editor` is the first remedy if E1 fails, not a
-starting point. One definition, so adding a tool is one edit."""
+"""The MVP tool set (Q12). `bash` alone can read, run and test, and `think`
+would blur probe position (b) by moving reasoning into a separate call.
+
+`EDIT` is the first remedy if E1 fails, not a starting point — add it by
+listing it in `AgentConfig.tools`. The failure it answers looks like this: with
+only `bash`, changing one line is `sed -i '640s/.../.../'` and works, but
+changing a function body means rewriting the file through a heredoc, and a model
+that cannot express the edit it wants spends its whole budget investigating
+instead. One observed trajectory copied the file to `.backup` and then to
+`.fixed` without ever writing either."""
 
 DIR_SEPARATOR = "--"
 """Separates the fields of a trajectory directory name. Not `__`: instance ids

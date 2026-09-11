@@ -25,10 +25,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from escape_probes.config import BASH, SUBMIT, ModelConfig
+from escape_probes.config import BASH, EDIT, SUBMIT, ModelConfig
 from escape_probes.model import Generation, Message, command_char_offset
 
-TOOL_SCHEMAS: list[dict[str, Any]] = [
+ALL_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
@@ -43,6 +43,25 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "cmd": {"type": "string", "description": "The command to run."},
                 },
                 "required": ["cmd"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": EDIT,
+            "description": (
+                "Replace an exact string in a file. The old text must occur exactly once; "
+                "include surrounding lines if it does not."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File to edit."},
+                    "old": {"type": "string", "description": "Text to replace, copied exactly."},
+                    "new": {"type": "string", "description": "Replacement text."},
+                },
+                "required": ["path", "old", "new"],
             },
         },
     },
@@ -67,11 +86,19 @@ class HFModel:
     on the first trajectory.
     """
 
-    def __init__(self, config: ModelConfig, device: str = "cuda") -> None:
+    def __init__(
+        self,
+        config: ModelConfig,
+        device: str = "cuda",
+        tools: tuple[str, ...] = (BASH, SUBMIT),
+    ) -> None:
         import torch  # noqa: PLC0415
         from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: PLC0415
 
         self.config = config
+        self.tool_schemas = [s for s in ALL_TOOL_SCHEMAS if s["function"]["name"] in tools]
+        """Only the tools the run enables, so the model is never shown one the
+        loop would reject (Q12)."""
         self.tokenizer = AutoTokenizer.from_pretrained(config.model_id, revision=config.revision)
         self.model = AutoModelForCausalLM.from_pretrained(
             config.model_id,
@@ -97,7 +124,7 @@ class HFModel:
         """
         text = self.tokenizer.apply_chat_template(
             [message.model_dump() for message in messages],
-            tools=TOOL_SCHEMAS,
+            tools=self.tool_schemas,
             add_generation_prompt=True,
             tokenize=False,
         )

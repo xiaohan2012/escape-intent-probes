@@ -3,9 +3,11 @@ import pytest
 from escape_probes.model import render_tool_call
 from escape_probes.tools import (
     BASH,
+    EDIT,
     SUBMIT,
     ToolCall,
     ToolParseError,
+    apply_edit,
     parse_tool_call,
     truncate,
 )
@@ -145,3 +147,66 @@ class TestTruncate:
         # The elision notice is the only overhead.
         result = truncate("x" * 5000, limit)
         assert len(result) <= limit + 60
+
+
+class TestApplyEdit:
+    """Test the edit tool — the first remedy if E1 fails (Q12)."""
+
+    @property
+    def content(self) -> str:
+        return "def f(x):\n    return x + 1\n\ndef g(y):\n    return y\n"
+
+    def sandbox(self, content: str | None = None):
+        from tests.test_rollout import FakeSandbox
+
+        return FakeSandbox({"cat /testbed/m.py": self.content if content is None else content})
+
+    def call(self, **arguments: str) -> ToolCall:
+        return ToolCall(name=EDIT, arguments={"path": "/testbed/m.py", **arguments})
+
+    def test_replaces_an_exact_match(self) -> None:
+        sandbox = self.sandbox()
+        result = apply_edit(self.call(old="return x + 1", new="return x + 2"), sandbox)
+        assert "Edited" in result
+        assert any("return x + 2" in command for command in sandbox.commands)
+
+    def test_refuses_when_nothing_matches(self) -> None:
+        # A mistaken assumption about the file, not an edit to guess at.
+        result = apply_edit(self.call(old="return z", new="return 0"), self.sandbox())
+        assert "No match" in result
+
+    def test_refuses_an_ambiguous_match(self) -> None:
+        # Applying one of two would show up much later as an unexplained failure.
+        sandbox = self.sandbox("return x\nreturn x\n")
+        result = apply_edit(self.call(old="return x", new="return y"), sandbox)
+        assert "appears 2 times" in result
+
+    def test_keeps_the_rest_of_the_file(self) -> None:
+        sandbox = self.sandbox()
+        apply_edit(self.call(old="return x + 1", new="return x + 2"), sandbox)
+        written = next(c for c in sandbox.commands if "cat >" in c)
+        assert "def g(y):" in written
+
+
+class TestEditParsing:
+    """Test validation of an edit call."""
+
+    def rendered(self, **arguments: str) -> str:
+        return render_tool_call(EDIT, arguments)
+
+    def test_accepts_a_complete_call(self) -> None:
+        text = self.rendered(path="m.py", old="a", new="b")
+        call = parse_tool_call(text, allowed=(BASH, SUBMIT, EDIT))
+        assert call.arguments == {"path": "m.py", "old": "a", "new": "b"}
+
+    @pytest.mark.parametrize("missing", ["path", "old", "new"])
+    def test_rejects_an_incomplete_call(self, missing: str) -> None:
+        arguments = {"path": "m.py", "old": "a", "new": "b"}
+        del arguments[missing]
+        with pytest.raises(ToolParseError, match=missing):
+            parse_tool_call(self.rendered(**arguments), allowed=(BASH, SUBMIT, EDIT))
+
+    def test_is_unavailable_unless_enabled(self) -> None:
+        # Not in the default tool set: it is a remedy, not a starting point.
+        with pytest.raises(ToolParseError, match="Unknown tool"):
+            parse_tool_call(self.rendered(path="m.py", old="a", new="b"))

@@ -52,7 +52,7 @@ def build_model(fake: bool, config: RunConfig) -> ModelBackend:
         return FakeModel(FAKE_SCRIPT)
     from escape_probes.hf_backend import HFModel  # noqa: PLC0415
 
-    return HFModel(config.model)
+    return HFModel(config.model, tools=config.agent.tools)
 
 
 def main() -> int:
