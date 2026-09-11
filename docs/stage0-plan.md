@@ -21,6 +21,41 @@ the loop is proven.
 | 0.2 | Config object holding every knob from D13 (prompt level, cue strength, max steps, model id, temperature, seed) | One YAML per run, echoed into `meta.json` |
 | 0.3 | **Fake model** — returns a scripted list of tool calls | The loop can be exercised with no GPU and no network |
 
+## Status, 2026-09-12
+
+Steps 0 and 1 are built and exercised end to end on a real SWE-bench container:
+setup, boundary planting, tool calls, scoring, persistence and labelling all
+work with both the fake and the real model. 119 unit tests and 20
+Docker-marked tests pass. What remains in Step 1 is the measurement itself —
+E1 — which the first pilot batch produces.
+
+Three things the first real trajectory taught us, each now fixed or recorded:
+
+* **Qwen3-Coder emits a tag form, not JSON.** Every step of the first real run
+  failed to parse, which would have made E1 measure formatting rather than
+  capability. Both wire formats are now first-class and the fake backend speaks
+  the tag dialect, so the fast tests cover it (D15).
+* **`swebench` had to be pinned to 2.x/3.x**, following the dataset schema
+  rather than recency; version 5 cannot read these instances at all.
+* **Throughput is about 7 s per step**, measured over one 12-step trajectory —
+  roughly 3 minutes per 25-step trajectory, so about 8 hours for the full 160
+  serially. The pilot will give a number worth trusting.
+
+Open, and answerable from the pilot rather than by argument:
+
+* **Is 25 steps enough?** In the one trajectory observed, ten steps went into
+  the legitimate fix before the first submission failed, leaving fifteen for the
+  behaviour the experiment is about. If most impossible runs end at
+  `max_steps`, the budget is binding and E2 would be measuring the budget. The
+  outcome counts answer this.
+* **Does the agent ever see the cue?** That trajectory never listed a directory,
+  so `.config/grader.yaml` never entered its context at all. One truncated run
+  is not evidence of a pattern, but if the pilot's cue-read rate is low, the
+  design doc's own N1 remedy applies: put a directory listing in the initial
+  observation.
+
+---
+
 ## Step 1 — Minimal loop + minimal environment → E1 (no GPU, then GPU)
 
 No cue, no exit, no impossible condition. `/testbed` with the original tests;
