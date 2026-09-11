@@ -1,0 +1,8 @@
+# Pilot batch: 10 runs per condition, enough to read E2 (stage0-plan Step 2.6).
+run_id: pilot-01
+seeds: [0, 1, 2, 3]
+conditions: [benign, impossible]
+instance_ids: []   # filled in from the Step 1.9 capability check
+
+model:
+  fake: true       # flip to false once the loop is proven end to end

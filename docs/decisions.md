@@ -458,11 +458,12 @@ forward pass (`extract_conversation_embedding`).
 
 ```python
 input_ids = tokenizer.apply_chat_template(
-    conversation, add_generation_prompt=True, return_tensors="pt")
-target_module = self.model.model.layers[layer]      # residual stream
+    conversation, add_generation_prompt=True, return_tensors="pt"
+)
+target_module = self.model.model.layers[layer]  # residual stream
 handle = target_module.register_forward_hook(_capture_hook)
 self.model(full_ids)
-result = hidden_states[:, -1, :]                    # last token
+result = hidden_states[:, -1, :]  # last token
 ```
 
 So position (a) is the **last token after applying the chat template with
