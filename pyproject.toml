@@ -48,7 +48,7 @@ include = ["src", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra -m 'not docker'"
 markers = [
     "docker: needs a running Docker daemon",
     "gpu: needs a GPU and the `model` dependency group",
