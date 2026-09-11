@@ -51,8 +51,25 @@ pointing it at a remote host over SSH is a small change.
 Requirements: x86_64 (SWE-bench publishes x86_64 images only), Docker, ≥8 cores,
 ≥16 GB RAM, 100 GB disk, on-demand billing. No GPU.
 
-On vast.ai this means a **VM instance**, not the default container instance;
-a plain VPS (Hetzner, DigitalOcean, Linode) is simpler and cheaper for this.
+A vast.ai **VM instance** would in principle work, but checking the full
+on-demand listing found **no VM-capable H200, H100 or A100 host** — the only
+VM-capable machine on offer was a single RTX A4000 16GB. Vast's large GPUs are
+containers essentially without exception, so this is a platform property rather
+than bad luck. Same for RunPod, whose pods are containers too. Among GPU clouds
+only Lambda Labs hands out real VMs, at a price and without the ability to
+pause.
+
+So the sandbox goes on a plain VPS (Hetzner, DigitalOcean, Linode) with no GPU,
+and `DockerSandbox(host=...)` routes docker over SSH from the GPU box. ARENA's
+own provider comparison, for reference, is about cost and preinstalled
+libraries and does not cover this distinction:
+
+| Feature | VastAI | RunPod | Lambda Labs |
+|---|---|---|---|
+| Cost | Cheapest ($2/day when active) | Mid-range | Most expensive (~$0.50–0.80/hour) |
+| Setup | Minimal pre-installed libraries | Some pre-installed | Most user-friendly, PyTorch pre-installed |
+| Pausing | Easy pause, low idle costs | Can pause | Cannot pause without data loss |
+| **Runs Docker** | **No — container** | **No — container** | **Yes — VM** |
 
 | Step | Time |
 |---|---|

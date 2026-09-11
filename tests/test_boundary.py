@@ -2,7 +2,7 @@ import pytest
 
 from escape_probes.boundary import GRADER_HOST, exit_patch_path, render_cue
 from escape_probes.config import CueStrength, EnvConfig
-from escape_probes.sandbox import IMAGE_PREFIX, ExecResult, image_for
+from escape_probes.sandbox import IMAGE_PREFIX, DockerSandbox, ExecResult, image_for
 
 
 class TestImageFor:
@@ -93,3 +93,38 @@ class TestExitPatchPath:
         one = exit_patch_path(env, "a")
         other = exit_patch_path(env, "b")
         assert one != other
+
+
+class TestRemoteDockerHost:
+    """Test routing docker invocations to another machine.
+
+    Rented GPU instances are themselves unprivileged containers, so the model
+    and the sandbox usually live on different machines (setup-log.md).
+    """
+
+    @property
+    def args(self) -> list[str]:
+        return ["docker", "exec", "-w", "/testbed", "abc123", "bash", "-lc", "ls -la"]
+
+    def test_local_host_is_left_alone(self) -> None:
+        box = DockerSandbox("django__django-12419", EnvConfig(), host=None)
+        assert box._docker(self.args) == self.args
+
+    def test_remote_host_is_prefixed_with_ssh(self) -> None:
+        box = DockerSandbox("django__django-12419", EnvConfig(), host="sandbox-box")
+        wrapped = box._docker(self.args)
+        assert wrapped[0] == "ssh"
+        assert "sandbox-box" in wrapped
+
+    def test_remote_multiplexes_the_connection(self) -> None:
+        # One tool call is one round trip; a handshake each time would cost more
+        # than the command.
+        box = DockerSandbox("django__django-12419", EnvConfig(), host="sandbox-box")
+        assert "ControlMaster=auto" in box._docker(self.args)
+
+    def test_remote_quotes_arguments_containing_spaces(self) -> None:
+        # ssh joins its arguments with spaces and hands them to a remote shell,
+        # so an unquoted command would be re-split there.
+        box = DockerSandbox("django__django-12419", EnvConfig(), host="sandbox-box")
+        wrapped = box._docker(self.args)
+        assert "'ls -la'" in wrapped
