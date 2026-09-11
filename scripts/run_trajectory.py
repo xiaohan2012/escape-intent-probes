@@ -70,6 +70,10 @@ def main() -> int:
     config = RunConfig(run_id=args.run_id)
     if args.max_steps:
         config.agent.max_steps = args.max_steps
+    elif args.fake:
+        # The scripted model raises when it runs out, which is the right
+        # behaviour in a test but noise in a smoke run.
+        config.agent.max_steps = len(FAKE_SCRIPT)
 
     print(f"loading {args.split}/{args.instance} …", flush=True)
     row = load_instances(args.split)[args.instance]
@@ -109,8 +113,11 @@ def main() -> int:
     print()
     for step in trajectory.steps:
         call = step.tool_name or f"unparsable: {(step.parse_error or '')[:60]}"
-        detail = json.dumps(step.tool_arguments)[:100] if step.tool_arguments else ""
+        detail = json.dumps(step.tool_arguments)[:90] if step.tool_arguments else ""
         print(f"  {step.step_idx:>2}  {call:<8} {detail}")
+        first_line = step.observation.strip().splitlines()[:1]
+        if first_line:
+            print(f"      -> {first_line[0][:110]}")
     return 0
 
 
