@@ -22,6 +22,7 @@ import logging
 import sys
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -83,6 +84,12 @@ def main() -> int:
     parser.add_argument("--seeds", nargs="+", type=int, default=None)
     parser.add_argument("--split", default="conflicting", choices=["conflicting", "oneoff"])
     parser.add_argument("--limit", type=int, default=None, help="stop after this many")
+    parser.add_argument(
+        "--setup-workers",
+        type=int,
+        default=8,
+        help="threads opening containers for a round; setup is I/O and the GPU idles through it",
+    )
     parser.add_argument(
         "--batch-size",
         type=int,
@@ -160,13 +167,24 @@ def main() -> int:
         group_started = time.monotonic()
 
         with ExitStack() as stack:
-            opened: list[tuple[tuple[str, str, int], SweBenchTask, DockerSandbox]] = []
-            for instance, condition, seed in group:
-                # Container setup is serial and outside the driver on purpose: a
-                # setup failure belongs to one work item and should be reported
-                # as such, not turn into a trajectory that never started.
+            # Setup is outside the driver on purpose: a failure here belongs to
+            # one work item and should be reported as such, not become a
+            # trajectory that never started.
+            #
+            # It runs in threads because it is I/O — `docker run`, then a few
+            # `docker exec` calls per item — and the card has nothing to do
+            # while it happens. Serially it was ~7 s per container, so a round
+            # of 18 spent over two minutes with the GPU at zero, once per cell.
+            # Each worker uses its own `ExitStack` and hands the teardown over
+            # with `pop_all`, which is the thread-safe way to put a context
+            # manager entered elsewhere onto this stack.
+            def open_one(
+                item: tuple[str, str, int],
+            ) -> tuple[tuple[str, str, int], SweBenchTask, DockerSandbox, ExitStack]:
+                instance, condition, seed = item
+                local = ExitStack()
                 try:
-                    sandbox = stack.enter_context(
+                    sandbox = local.enter_context(
                         DockerSandbox(instance, config.env, host=args.host)
                     )
                     task = SweBenchTask(
@@ -176,15 +194,28 @@ def main() -> int:
                     )
                     task.setup(sandbox)
                     plant(sandbox, config.env, instance, task.gold_patch)
-                except Exception as error:
-                    done_count += 1
-                    print(
-                        f"  [{done_count}/{len(todo)}] {instance} {condition} {seed}: "
-                        f"SETUP FAILED {error}",
-                        flush=True,
-                    )
-                    continue
-                opened.append(((instance, condition, seed), task, sandbox))
+                except BaseException:
+                    local.close()
+                    raise
+                return item, task, sandbox, local.pop_all()
+
+            opened: list[tuple[tuple[str, str, int], SweBenchTask, DockerSandbox]] = []
+            with ThreadPoolExecutor(max_workers=min(len(group), args.setup_workers)) as pool:
+                futures = {pool.submit(open_one, item): item for item in group}
+                for future in futures:
+                    instance, condition, seed = futures[future]
+                    try:
+                        item, task, sandbox, teardown = future.result()
+                    except Exception as error:
+                        done_count += 1
+                        print(
+                            f"  [{done_count}/{len(todo)}] {instance} {condition} {seed}: "
+                            f"SETUP FAILED {error}",
+                            flush=True,
+                        )
+                        continue
+                    stack.push(teardown)
+                    opened.append((item, task, sandbox))
 
             if not opened:
                 continue
