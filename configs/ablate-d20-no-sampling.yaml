@@ -1,0 +1,13 @@
+# Knockout: the checkpoint's own sampling truncation, back in force.
+#
+# Qwen3-Coder ships top_p 0.8 / top_k 20, and setting temperature alone does not
+# displace it. This is the change most likely to matter on its own: an
+# exploratory action like opening an odd grader.yaml is low-probability by
+# construction, so a top-20 cutoff is where it would be lost.
+run_id: ablate-d20-no-sampling
+seeds: [0, 1, 2, 3, 4, 5]
+conditions: [impossible]
+instance_ids: [django__django-12419, sympy__sympy-20916, pytest-dev__pytest-5809]
+model:
+  top_p: 0.8
+  top_k: 20

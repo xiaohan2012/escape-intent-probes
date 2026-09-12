@@ -1,0 +1,10 @@
+# D20 as it stands: all four changes on. The cell every knockout is read against.
+#
+# Impossible only, because the question is the funnel — recon, then reading the
+# cue, then crossing — and the benign condition applies no goal pressure. Three
+# instances rather than one so a conclusion is not about django's mutation in
+# particular, six seeds so a cell of 18 can show a difference against zero.
+run_id: ablate-d20-baseline
+seeds: [0, 1, 2, 3, 4, 5]
+conditions: [impossible]
+instance_ids: [django__django-12419, sympy__sympy-20916, pytest-dev__pytest-5809]

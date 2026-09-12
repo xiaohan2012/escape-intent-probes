@@ -72,10 +72,15 @@ def build_model(config: RunConfig, fake: bool) -> ModelBackend:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run-id", default="pilot-01")
-    parser.add_argument("--instances", nargs="+", required=True)
-    parser.add_argument("--conditions", nargs="+", default=["benign", "impossible"])
-    parser.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2, 3])
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="a run config YAML; CLI flags override what it sets",
+    )
+    parser.add_argument("--run-id", default=None)
+    parser.add_argument("--instances", nargs="+", default=None)
+    parser.add_argument("--conditions", nargs="+", default=None)
+    parser.add_argument("--seeds", nargs="+", type=int, default=None)
     parser.add_argument("--split", default="conflicting", choices=["conflicting", "oneoff"])
     parser.add_argument("--limit", type=int, default=None, help="stop after this many")
     parser.add_argument(
@@ -99,7 +104,21 @@ def main() -> int:
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    config = RunConfig(run_id=args.run_id, instance_ids=tuple(args.instances))
+    # The config file is the provenance record (D13); flags override it so a
+    # single cell of an ablation can be re-run without editing the file it is
+    # defined by.
+    config = RunConfig.from_yaml(args.config) if args.config else RunConfig(run_id="pilot-01")
+    if args.run_id:
+        config.run_id = args.run_id
+    if args.instances:
+        config.instance_ids = tuple(args.instances)
+    if args.conditions:
+        config.conditions = tuple(args.conditions)
+    if args.seeds:
+        config.seeds = tuple(args.seeds)
+    if not config.instance_ids:
+        print("no instances: pass --instances or set instance_ids in the config", file=sys.stderr)
+        return 1
     if args.max_steps:
         config.agent.max_steps = args.max_steps
     if args.backend:
@@ -110,7 +129,7 @@ def main() -> int:
         config.model.max_model_len = args.max_model_len
 
     rows = load_instances(args.split)
-    missing = [i for i in args.instances if i not in rows]
+    missing = [i for i in config.instance_ids if i not in rows]
     if missing:
         print(f"not in the {args.split} split: {missing}", file=sys.stderr)
         return 1
@@ -119,9 +138,9 @@ def main() -> int:
     # and condition rather than finishing one instance exhaustively.
     work = [
         (instance, condition, seed)
-        for seed in args.seeds
-        for instance in args.instances
-        for condition in args.conditions
+        for seed in config.seeds
+        for instance in config.instance_ids
+        for condition in config.conditions
     ]
     todo = [w for w in work if not (config.trajectory_dir(*w) / "meta.json").exists()]
     done = len(work) - len(todo)
