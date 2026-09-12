@@ -6,6 +6,8 @@ milliseconds, so that when the real model is attached a bad trajectory is known
 not to be the loop's fault (D3).
 """
 
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -14,7 +16,13 @@ from escape_probes.config import Condition, EnvConfig, RunConfig
 from escape_probes.labels import label
 from escape_probes.model import FakeModel, ScriptedStep
 from escape_probes.prompts import system_prompt
-from escape_probes.rollout import drive_batch, opening_message, rollout, rollout_steps
+from escape_probes.rollout import (
+    drive_batch,
+    drive_threaded,
+    opening_message,
+    rollout,
+    rollout_steps,
+)
 from escape_probes.sandbox import ExecResult, Sandbox, SandboxError
 from escape_probes.trace import Trajectory
 
@@ -655,6 +663,122 @@ class TestDriveBatch:
         )
         errors: list[tuple[int, str]] = []
         trajectories = drive_batch(steps, model, on_error=lambda i, e: errors.append((i, str(e))))
+
+        assert trajectories[0] is None
+        assert errors == [(0, "container is gone")]
+        assert trajectories[1] is not None
+        assert trajectories[1].meta.outcome == "passed"
+
+
+class RecordingThreadedModel:
+    """One conversation at a time, plus the concurrency it actually saw.
+
+    The threaded driver exists because an HTTP backend has no batch dimension to
+    fill (D22) — the limit is the provider's rate limit, not a GPU — so what has
+    to be checked is that trajectories really do overlap. A driver that
+    serialised them would still return the right trajectories and take twenty
+    times as long, which no assertion on the results would catch.
+    """
+
+    def __init__(self, scripts: dict[str, list[ScriptedStep]]) -> None:
+        self.models = {key: FakeModel(script) for key, script in scripts.items()}
+        self._lock = threading.Lock()
+        self._in_flight = 0
+        self.peak_in_flight = 0
+
+    def generate(self, messages):  # type: ignore[no-untyped-def]
+        with self._lock:
+            self._in_flight += 1
+            self.peak_in_flight = max(self.peak_in_flight, self._in_flight)
+        try:
+            time.sleep(0.02)
+            opening = messages[1].content
+            key = next(k for k in self.models if k in opening)
+            return self.models[key].generate(messages)
+        finally:
+            with self._lock:
+                self._in_flight -= 1
+
+
+class TestDriveThreaded:
+    """Test the concurrent driver: N trajectories, one request each, at once."""
+
+    def steps(self, config: RunConfig, ids: list[str]) -> list:  # type: ignore[type-arg]
+        return [
+            rollout_steps(FakeTask(instance_id=i), FakeSandbox(), config, "impossible", 0)
+            for i in ids
+        ]
+
+    @property
+    def scripts(self) -> dict[str, list[ScriptedStep]]:
+        return {
+            "alpha": [
+                ScriptedStep(tool="bash", arguments={"cmd": "ls"}),
+                ScriptedStep(tool="submit"),
+            ],
+            "beta": [ScriptedStep(tool="submit")],
+            "gamma": [ScriptedStep(tool="bash", arguments={"cmd": "ls"})] * 2
+            + [ScriptedStep(tool="submit")],
+        }
+
+    def test_results_keep_the_order_they_were_given(self, config: RunConfig) -> None:
+        # `beta` finishes first and must still come back second.
+        ids = ["alpha", "beta", "gamma"]
+        model = RecordingThreadedModel(self.scripts)
+        trajectories = drive_threaded(self.steps(config, ids), model, max_workers=3)
+        assert [t.meta.instance_id for t in trajectories if t] == ids
+
+    def test_the_trajectories_overlap(self, config: RunConfig) -> None:
+        model = RecordingThreadedModel(self.scripts)
+        drive_threaded(self.steps(config, ["alpha", "beta", "gamma"]), model, max_workers=3)
+        assert model.peak_in_flight > 1
+
+    def test_the_worker_count_is_a_ceiling(self, config: RunConfig) -> None:
+        # The provider's rate limit is the reason this knob exists; exceeding it
+        # returns 429s that look like a flaky model.
+        model = RecordingThreadedModel(self.scripts)
+        drive_threaded(self.steps(config, ["alpha", "beta", "gamma"]), model, max_workers=1)
+        assert model.peak_in_flight == 1
+
+    def test_it_agrees_with_the_serial_driver(self, config: RunConfig) -> None:
+        script = [
+            ScriptedStep(tool="bash", arguments={"cmd": "cat grader.yaml"}),
+            ScriptedStep(tool="submit"),
+        ]
+        serial = rollout(
+            FakeTask(), FakeModel(list(script)), FakeSandbox(), config, "impossible", 0
+        )
+        threaded = drive_threaded(
+            self.steps(config, ["django__django-12419"]),
+            RecordingThreadedModel({"django__django-12419": list(script)}),
+        )[0]
+        assert threaded is not None
+        assert threaded.meta.outcome == serial.meta.outcome
+        assert [s.tool_name for s in threaded.steps] == [s.tool_name for s in serial.steps]
+
+    def test_an_empty_batch_makes_no_requests(self, config: RunConfig) -> None:
+        model = RecordingThreadedModel({})
+        assert drive_threaded([], model) == []
+        assert model.peak_in_flight == 0
+
+    def test_one_dead_trajectory_does_not_take_the_others(self, config: RunConfig) -> None:
+        class DyingSandbox(FakeSandbox):
+            def exec(self, command: str, timeout: int = 120, workdir: str | None = None):  # type: ignore[no-untyped-def]
+                if "boom" in command:
+                    raise SandboxError("container is gone")
+                return super().exec(command, timeout, workdir)
+
+        steps = [
+            rollout_steps(FakeTask(instance_id="dying"), DyingSandbox(), config, "impossible", 0),
+            rollout_steps(FakeTask(instance_id="beta"), FakeSandbox(), config, "impossible", 0),
+        ]
+        model = RecordingThreadedModel(
+            {"dying": [ScriptedStep(tool="bash", arguments={"cmd": "boom"})], **self.scripts}
+        )
+        errors: list[tuple[int, str]] = []
+        trajectories = drive_threaded(
+            steps, model, max_workers=2, on_error=lambda i, e: errors.append((i, str(e)))
+        )
 
         assert trajectories[0] is None
         assert errors == [(0, "container is gone")]

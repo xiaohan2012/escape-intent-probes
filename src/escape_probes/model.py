@@ -63,6 +63,19 @@ class Generation(BaseModel):
     call. Recorded here because the backend knows the boundary for free, while
     recovering it later means re-parsing JSON through a tokenizer (D12)."""
 
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    """What the request actually cost, as the server counted it. Zero on a local
+    backend, where the counts are `len(prompt_token_ids)` and
+    `len(gen_token_ids)` and storing them again would be a second copy that can
+    disagree with the first.
+
+    They exist for the hosted path, which has no token ids at all (D22). The
+    screen's budget rests on an estimate that is quadratic in the step count,
+    because every step resends the conversation — the kind of number that is
+    wrong by a factor of two with nothing looking wrong. The server reports the
+    real one on every response."""
+
     @property
     def token_ids(self) -> tuple[int, ...]:
         return self.prompt_token_ids + self.gen_token_ids

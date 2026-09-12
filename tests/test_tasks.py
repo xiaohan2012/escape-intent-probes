@@ -252,6 +252,39 @@ OK
         with pytest.raises(RuntimeError, match="arity"):
             _parse_report("django/django", self.DJANGO_LOG)
 
+    def test_every_parser_we_can_reach_takes_two_arguments(self) -> None:
+        """Guards the arity `_parse_report` calls with.
+
+        Upstream is not uniform: `processing/p5.js` takes one argument and the
+        other twenty-two take two. That repository is JavaScript and cannot
+        appear in our split, which is Python throughout — but the assumption is
+        worth a test, because an earlier version of this code called the wrong
+        arity and the resulting `TypeError` was swallowed as an unparsable log,
+        which failed every submission and invalidated a batch.
+        """
+        import inspect  # noqa: PLC0415
+
+        from swebench.harness.log_parsers import MAP_REPO_TO_PARSER  # noqa: PLC0415
+
+        reachable = [
+            "django/django",
+            "sympy/sympy",
+            "sphinx-doc/sphinx",
+            "pytest-dev/pytest",
+            "astropy/astropy",
+            "matplotlib/matplotlib",
+            "scikit-learn/scikit-learn",
+            "pydata/xarray",
+            "pylint-dev/pylint",
+            "mwaskom/seaborn",
+        ]
+        wrong = {
+            repo: len(inspect.signature(MAP_REPO_TO_PARSER[repo]).parameters)
+            for repo in reachable
+            if len(inspect.signature(MAP_REPO_TO_PARSER[repo]).parameters) != 2
+        }
+        assert wrong == {}, f"these parsers no longer take (log, test_spec): {wrong}"
+
     def test_the_parsers_ignore_the_spec(self) -> None:
         """Guards the `None` that `_parse_report` passes as `test_spec`.
 

@@ -2,7 +2,14 @@ import pytest
 
 from escape_probes.boundary import GRADER_HOST, exit_patch_path, render_cue
 from escape_probes.config import CueStrength, EnvConfig
-from escape_probes.sandbox import IMAGE_PREFIX, DockerSandbox, ExecResult, image_for
+from escape_probes.sandbox import (
+    IMAGE_PREFIX,
+    DockerSandbox,
+    ExecResult,
+    _run,
+    host_arch,
+    image_for,
+)
 
 
 class TestImageFor:
@@ -18,7 +25,82 @@ class TestImageFor:
     )
     def test_substitutes_the_double_underscore(self, instance_id: str, expected_tag: str) -> None:
         # `__` is not legal in a tag, so upstream writes `_1776_`.
-        assert image_for(instance_id) == f"{IMAGE_PREFIX}{expected_tag}:latest"
+        assert image_for(instance_id) == f"{IMAGE_PREFIX}{host_arch()}.{expected_tag}:latest"
+
+    @pytest.mark.parametrize(
+        "arch, expected",
+        [
+            ("x86_64", "swebench/sweb.eval.x86_64.django_1776_django-12419:latest"),
+            ("arm64", "swebench/sweb.eval.arm64.django_1776_django-12419:latest"),
+        ],
+    )
+    def test_the_architecture_selects_the_image(self, arch: str, expected: str) -> None:
+        # Upstream publishes an arm64 set alongside the x86_64 one, which is
+        # what lets the frontier screen run its sandboxes on a laptop (D22).
+        assert image_for("django__django-12419", arch=arch) == expected
+
+    def test_the_default_is_the_host(self) -> None:
+        assert image_for("sympy__sympy-20916") == image_for("sympy__sympy-20916", arch=host_arch())
+
+    def test_an_unknown_architecture_is_refused(self) -> None:
+        # Better than composing a name Docker Hub will 404 on after container
+        # setup has already started.
+        with pytest.raises(ValueError, match="unknown architecture"):
+            image_for("sympy__sympy-20916", arch="riscv64")
+
+
+class TestSandboxImageArch:
+    """Test that a run can pin the architecture its images come from.
+
+    Left to the host, the same config on a laptop and on a rented x86 box pulls
+    different images with nothing in the run saying which.
+    """
+
+    def test_the_config_pins_it(self) -> None:
+        env = EnvConfig(image_arch="x86_64")
+        box = DockerSandbox("django__django-12419", env, host=None)
+        assert box.image == image_for("django__django-12419", arch="x86_64")
+
+    def test_unset_takes_the_host(self) -> None:
+        box = DockerSandbox("django__django-12419", EnvConfig(), host=None)
+        assert box.image == image_for("django__django-12419", arch=host_arch())
+
+    def test_the_architecture_is_recorded_in_the_image_name(self) -> None:
+        # No separate meta field is needed: `TrajectoryMeta.image` already
+        # carries the full image name, and the name now names the architecture.
+        box = DockerSandbox("django__django-12419", EnvConfig(image_arch="arm64"), host=None)
+        assert "arm64" in box.image
+
+
+class TestHostArch:
+    """Test the mapping from `platform.machine()` onto upstream's arch names.
+
+    Getting this wrong is silent in the expensive direction: an amd64 image on
+    an arm64 host runs under emulation, and a Django suite that then takes
+    minutes per invocation looks like a slow model rather than a wrong image.
+    """
+
+    @pytest.mark.parametrize(
+        "machine, expected",
+        [
+            ("x86_64", "x86_64"),
+            ("AMD64", "x86_64"),
+            ("amd64", "x86_64"),
+            ("arm64", "arm64"),
+            ("aarch64", "arm64"),
+        ],
+    )
+    def test_platform_names_map_onto_upstream_names(
+        self, machine: str, expected: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Three spellings reach the same architecture depending on the OS.
+        monkeypatch.setattr("platform.machine", lambda: machine)
+        assert host_arch() == expected
+
+    def test_an_unrecognised_machine_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("platform.machine", lambda: "s390x")
+        with pytest.raises(ValueError, match="unknown architecture"):
+            host_arch()
 
 
 class TestExecResult:
@@ -128,3 +210,30 @@ class TestRemoteDockerHost:
         box = DockerSandbox("django__django-12419", EnvConfig(), host="sandbox-box")
         wrapped = box._docker(self.args)
         assert "'ls -la'" in wrapped
+
+
+class TestRunDecoding:
+    """Test that non-UTF-8 output does not destroy a trajectory.
+
+    An agent works on real repositories and will read files the author never
+    meant to be text — a `.mo` catalogue, a pickled fixture, a truncated binary.
+    `subprocess.run(text=True)` decodes strictly, so one such byte raised
+    `UnicodeDecodeError` out of `sandbox.exec`, which the driver treats as a
+    dead container: the whole trajectory came back as `None`.
+
+    It was found on `django__django-12419`, deterministically, and it is not
+    specific to any backend — the same byte would have killed a local rollout.
+    Replacing the undecodable bytes keeps the trajectory, and what the agent
+    sees is what a terminal would have shown it anyway.
+    """
+
+    def test_undecodable_bytes_are_replaced_rather_than_raising(self) -> None:
+        result = _run(["python3", "-c", "import sys; sys.stdout.buffer.write(b'ok\\x8abad')"])
+        assert "ok" in result.stdout
+        assert result.exit_code == 0
+
+    def test_the_exit_code_still_comes_through(self) -> None:
+        result = _run(
+            ["python3", "-c", "import sys; sys.stderr.buffer.write(b'\\x8a'); sys.exit(3)"]
+        )
+        assert result.exit_code == 3

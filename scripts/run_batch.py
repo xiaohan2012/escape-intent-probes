@@ -1,5 +1,6 @@
 """Run a batch of trajectories, reporting as it goes.
 
+    uv run python scripts/run_batch.py --config configs/screen-01-moonshot.yaml
     uv run python scripts/run_batch.py --instances django__django-12419 \\
         --seeds 0 1 2 3 --limit 5
 
@@ -28,17 +29,23 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from escape_probes.backends import prefers_concurrency  # noqa: E402
 from escape_probes.boundary import plant  # noqa: E402
 from escape_probes.config import RunConfig  # noqa: E402
 from escape_probes.labels import Labels, label  # noqa: E402
 from escape_probes.model import ModelBackend  # noqa: E402
-from escape_probes.rollout import SerialBatch, drive_batch, rollout_steps  # noqa: E402
+from escape_probes.rollout import (  # noqa: E402
+    SerialBatch,
+    drive_batch,
+    drive_threaded,
+    rollout_steps,
+)
 from escape_probes.sandbox import DockerSandbox  # noqa: E402
 from escape_probes.tasks import SweBenchTask, load_instances  # noqa: E402
 from escape_probes.trace import Trajectory  # noqa: E402
 
 
-def summarise(results: list[Labels], elapsed: float) -> str:
+def summarise(results: list[Labels], elapsed: float, tokens: tuple[int, int] = (0, 0)) -> str:
     """The numbers E1 and E2 are read from, as they stand."""
     lines = []
     for condition in ("benign", "impossible"):
@@ -58,6 +65,16 @@ def summarise(results: list[Labels], elapsed: float) -> str:
     lines.append(f"  outcomes    {dict(outcomes)}")
     lines.append(f"  mean steps  {sum(r.n_steps for r in results) / len(results):.1f}")
     lines.append(f"  elapsed     {elapsed / 60:.1f} min  ({elapsed / len(results):.0f}s each)")
+    if any(tokens):
+        # Reported because the screen's budget rests on an estimate quadratic in
+        # the step count, which is the kind of number that is wrong by a factor
+        # of two with nothing looking wrong (D22). Only a hosted backend fills
+        # these in; a local one has the counts in its spans already.
+        prompt, completion = tokens
+        lines.append(
+            f"  tokens      prompt={prompt / 1e6:.2f}M completion={completion / 1e3:.0f}k  "
+            f"({prompt / len(results) / 1e6:.2f}M prompt per trajectory)"
+        )
     return "\n".join(lines)
 
 
@@ -73,8 +90,14 @@ def build_model(config: RunConfig, fake: bool) -> ModelBackend:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="a run config; its run_id, instances, conditions and seeds win over the flags below",
+    )
     parser.add_argument("--run-id", default="pilot-01")
-    parser.add_argument("--instances", nargs="+", required=True)
+    parser.add_argument("--instances", nargs="+", default=None)
     parser.add_argument("--conditions", nargs="+", default=["benign", "impossible"])
     parser.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2, 3])
     parser.add_argument("--split", default="conflicting", choices=["conflicting", "oneoff"])
@@ -93,7 +116,7 @@ def main() -> int:
     )
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--host", default=None, help="SSH destination of the Docker host")
-    parser.add_argument("--backend", default=None, choices=["vllm", "hf"])
+    parser.add_argument("--backend", default=None, choices=["vllm", "hf", "openrouter"])
     parser.add_argument(
         "--tp",
         type=int,
@@ -106,7 +129,18 @@ def main() -> int:
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    config = RunConfig(run_id=args.run_id, instance_ids=tuple(args.instances))
+    if args.config is not None:
+        # The config wins, and says so by overwriting the flags rather than
+        # sitting beside them in a second set of names.
+        config = RunConfig.from_yaml(args.config)
+        args.instances = list(config.instance_ids)
+        args.conditions = list(config.conditions)
+        args.seeds = list(config.seeds)
+    elif args.instances:
+        config = RunConfig(run_id=args.run_id, instance_ids=tuple(args.instances))
+    else:
+        print("pass --config or --instances", file=sys.stderr)
+        return 1
     if args.max_steps:
         config.agent.max_steps = args.max_steps
     if args.backend:
@@ -142,6 +176,7 @@ def main() -> int:
     results: list[Labels] = []
     started = time.monotonic()
     done_count = 0
+    tokens = [0, 0]
 
     for group_start in range(0, len(todo), args.batch_size):
         group = todo[group_start : group_start + args.batch_size]
@@ -210,8 +245,17 @@ def main() -> int:
                 instance, condition, seed = opened[index][0]
                 print(f"  {instance} {condition} {seed}: FAILED {error}", flush=True)
 
-            batched = model if hasattr(model, "generate_batch") else SerialBatch(model)
-            trajectories = drive_batch(steps, batched, on_error=report_error)
+            # Which driver, asked of the backend rather than re-derived from
+            # the config: `config.backend` is switched on once already, where
+            # the model is built, and answering the same question twice is two
+            # switches that can drift.
+            if prefers_concurrency(model):
+                trajectories = drive_threaded(
+                    steps, model, max_workers=len(steps), on_error=report_error
+                )
+            else:
+                batched = model if hasattr(model, "generate_batch") else SerialBatch(model)
+                trajectories = drive_batch(steps, batched, on_error=report_error)
 
         group_seconds = time.monotonic() - group_started
         for (instance, condition, seed), trajectory in zip(
@@ -223,6 +267,8 @@ def main() -> int:
             trajectory.save(config.trajectory_dir(instance, condition, seed))
             labels = label(trajectory, config.env)
             results.append(labels)
+            tokens[0] += sum(s.prompt_tokens for s in trajectory.steps)
+            tokens[1] += sum(s.completion_tokens for s in trajectory.steps)
             print(
                 f"  [{done_count}/{len(todo)}] {instance} {condition} seed={seed} "
                 f"{trajectory.meta.outcome} steps={labels.n_steps} t*={labels.t_star} "
@@ -238,12 +284,12 @@ def main() -> int:
 
         if results:
             print(f"\n--- after {done_count} ---")
-            print(summarise(results, time.monotonic() - started))
+            print(summarise(results, time.monotonic() - started, (tokens[0], tokens[1])))
             print(flush=True)
 
     if results:
         print("\n=== batch ===")
-        print(summarise(results, time.monotonic() - started))
+        print(summarise(results, time.monotonic() - started, (tokens[0], tokens[1])))
     return 0
 
 

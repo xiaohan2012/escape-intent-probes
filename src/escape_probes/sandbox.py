@@ -21,6 +21,7 @@ reused channel.
 
 from __future__ import annotations
 
+import platform
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -28,13 +29,50 @@ from typing import Protocol
 
 from escape_probes.config import EnvConfig
 
-IMAGE_PREFIX = "swebench/sweb.eval.x86_64."
+IMAGE_PREFIX = "swebench/sweb.eval."
 """SWE-bench's prebuilt images on Docker Hub. Instance ids embed `__`, which is
 not legal in a tag, so upstream substitutes `_1776_`."""
 
+MACHINE_ARCHITECTURES = {
+    "x86_64": "x86_64",
+    "amd64": "x86_64",
+    "arm64": "arm64",
+    "aarch64": "arm64",
+}
+"""`platform.machine()` onto the two names upstream publishes images under.
 
-def image_for(instance_id: str) -> str:
-    return f"{IMAGE_PREFIX}{instance_id.replace('__', '_1776_')}:latest"
+Three spellings reach the same architecture depending on the operating system,
+and upstream uses exactly one of them per architecture.
+"""
+
+
+def host_arch() -> str:
+    """The architecture of the machine the containers will run on.
+
+    A default rather than a configuration knob, because getting it wrong is
+    silent in the expensive direction: an amd64 image on an arm64 host runs
+    under emulation, and a Django suite that then takes minutes per invocation
+    looks like a slow model rather than a wrong image.
+    """
+    machine = platform.machine().lower()
+    if machine not in MACHINE_ARCHITECTURES:
+        raise ValueError(f"unknown architecture {platform.machine()!r}")
+    return MACHINE_ARCHITECTURES[machine]
+
+
+def image_for(instance_id: str, arch: str | None = None) -> str:
+    """The prebuilt image for an instance, for one architecture.
+
+    Upstream publishes an arm64 set alongside the x86_64 one, which is what lets
+    the frontier screen run its sandboxes on a laptop: it needs no GPU, so
+    binding it to a rented x86 box would spend the one advantage it has (D22).
+    Arm64 is not validated upstream for evaluation parity, which does not matter
+    for a diagnostic whose comparison is already broken along the model axis.
+    """
+    arch = arch or host_arch()
+    if arch not in set(MACHINE_ARCHITECTURES.values()):
+        raise ValueError(f"unknown architecture {arch!r}")
+    return f"{IMAGE_PREFIX}{arch}.{instance_id.replace('__', '_1776_')}:latest"
 
 
 @dataclass(frozen=True)
@@ -88,8 +126,20 @@ more than the command itself."""
 
 
 def _run(args: list[str], timeout: int = 120) -> ExecResult:
+    """Run a command and capture both streams, whatever bytes come back.
+
+    `errors="replace"` rather than strict decoding: an agent works on a real
+    repository and will read files nobody meant to be text — a `.mo` catalogue,
+    a pickled fixture, a binary that got truncated. Strict decoding raised
+    `UnicodeDecodeError` out of `exec`, which the driver cannot tell from a dead
+    container, so one such byte cost the whole trajectory. It did, on
+    `django__django-12419`, deterministically. Replacing the bytes shows the
+    agent what a terminal would have shown it.
+    """
     try:
-        proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(
+            args, capture_output=True, text=True, errors="replace", timeout=timeout
+        )
     except subprocess.TimeoutExpired:
         return ExecResult(stdout="", stderr=f"timed out after {timeout}s", exit_code=124)
     return ExecResult(stdout=proc.stdout, stderr=proc.stderr, exit_code=proc.returncode)
@@ -114,7 +164,7 @@ class DockerSandbox:
         self.network = network
         self.host = host
         """SSH destination of the Docker host. `None` runs Docker locally."""
-        self.image = image_for(instance_id)
+        self.image = image_for(instance_id, arch=env.image_arch)
         self._container_id: str | None = None
 
     def _docker(self, args: list[str]) -> list[str]:
