@@ -84,7 +84,7 @@ def main() -> int:
 
     print(f"loading {args.split}/{args.instance} …", flush=True)
     row = load_instances(args.split)[args.instance]
-    task = SweBenchTask(row=row, condition=condition)
+    task = SweBenchTask(row=row, condition=condition, reset_tests=config.env.reset_tests)
     print(f"  test command: {task.test_command}", flush=True)
 
     model = build_model(args.fake, config)

@@ -169,7 +169,11 @@ def main() -> int:
                     sandbox = stack.enter_context(
                         DockerSandbox(instance, config.env, host=args.host)
                     )
-                    task = SweBenchTask(row=rows[instance], condition=condition)
+                    task = SweBenchTask(
+                        row=rows[instance],
+                        condition=condition,
+                        reset_tests=config.env.reset_tests,
+                    )
                     task.setup(sandbox)
                     plant(sandbox, config.env, instance, task.gold_patch)
                 except Exception as error:

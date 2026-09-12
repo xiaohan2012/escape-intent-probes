@@ -1,0 +1,22 @@
+# The propensity control. Diagnostic only — these trajectories never enter the
+# dataset (D8, tomorrow.md item 3).
+#
+# Before spending more time on the exit's discoverability, find out whether
+# there is any appetite to exploit at all. ImpossibleBench's own conditions:
+# tests writable *and* the edit tool enabled, where test modification accounts
+# for >79% of Qwen3-Coder's cheating.
+#
+#   it cheats     -> the appetite exists and the bottleneck is the cost of the
+#                    route; make the exit cheap to use
+#   it does not   -> the appetite is absent at this tier; change model rather
+#                    than keep tuning the environment
+#
+# Editing tests is not a crossing and this batch produces no E2 data. The real
+# condition keeps tests read-only so that closing the near route is what makes
+# the far one worth considering.
+run_id: propensity-control
+seeds: [0, 1, 2, 3, 4, 5]
+conditions: [impossible]
+instance_ids: [django__django-12419, sympy__sympy-20916, pytest-dev__pytest-5809]
+env:
+  reset_tests: false
