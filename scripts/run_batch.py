@@ -22,6 +22,7 @@ import logging
 import sys
 import time
 from collections import Counter
+from contextlib import ExitStack
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -30,7 +31,7 @@ from escape_probes.boundary import plant  # noqa: E402
 from escape_probes.config import RunConfig  # noqa: E402
 from escape_probes.labels import Labels, label  # noqa: E402
 from escape_probes.model import ModelBackend  # noqa: E402
-from escape_probes.rollout import rollout  # noqa: E402
+from escape_probes.rollout import SerialBatch, drive_batch, rollout_steps  # noqa: E402
 from escape_probes.sandbox import DockerSandbox  # noqa: E402
 from escape_probes.tasks import SweBenchTask, load_instances  # noqa: E402
 from escape_probes.trace import Trajectory  # noqa: E402
@@ -77,7 +78,12 @@ def main() -> int:
     parser.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2, 3])
     parser.add_argument("--split", default="conflicting", choices=["conflicting", "oneoff"])
     parser.add_argument("--limit", type=int, default=None, help="stop after this many")
-    parser.add_argument("--report-every", type=int, default=5)
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=8,
+        help="trajectories advanced in lock step per engine call (D21)",
+    )
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--host", default=None, help="SSH destination of the Docker host")
     parser.add_argument("--backend", default=None, choices=["vllm", "hf"])
@@ -117,32 +123,75 @@ def main() -> int:
 
     results: list[Labels] = []
     started = time.monotonic()
+    done_count = 0
 
-    for index, (instance, condition, seed) in enumerate(todo, start=1):
-        task = SweBenchTask(row=rows[instance], condition=condition)
-        step_started = time.monotonic()
-        try:
-            with DockerSandbox(instance, config.env, host=args.host) as sandbox:
-                task.setup(sandbox)
-                plant(sandbox, config.env, instance, task.gold_patch)
-                trajectory = rollout(task, model, sandbox, config, condition, seed)
-        except Exception as error:  # one bad instance must not end the batch
-            print(f"  [{index}/{len(todo)}] {instance} {condition} {seed}: FAILED {error}")
-            continue
+    for group_start in range(0, len(todo), args.batch_size):
+        group = todo[group_start : group_start + args.batch_size]
+        group_started = time.monotonic()
 
-        trajectory.save(config.trajectory_dir(instance, condition, seed))
-        labels = label(trajectory, config.env)
-        results.append(labels)
+        with ExitStack() as stack:
+            opened: list[tuple[tuple[str, str, int], SweBenchTask, DockerSandbox]] = []
+            for instance, condition, seed in group:
+                # Container setup is serial and outside the driver on purpose: a
+                # setup failure belongs to one work item and should be reported
+                # as such, not turn into a trajectory that never started.
+                try:
+                    sandbox = stack.enter_context(
+                        DockerSandbox(instance, config.env, host=args.host)
+                    )
+                    task = SweBenchTask(row=rows[instance], condition=condition)
+                    task.setup(sandbox)
+                    plant(sandbox, config.env, instance, task.gold_patch)
+                except Exception as error:
+                    done_count += 1
+                    print(
+                        f"  [{done_count}/{len(todo)}] {instance} {condition} {seed}: "
+                        f"SETUP FAILED {error}",
+                        flush=True,
+                    )
+                    continue
+                opened.append(((instance, condition, seed), task, sandbox))
+
+            if not opened:
+                continue
+
+            steps = [
+                rollout_steps(task, sandbox, config, condition, seed)
+                for (_, condition, seed), task, sandbox in opened
+            ]
+
+            def report_error(index: int, error: Exception, opened=opened) -> None:
+                instance, condition, seed = opened[index][0]
+                print(f"  {instance} {condition} {seed}: FAILED {error}", flush=True)
+
+            batched = model if hasattr(model, "generate_batch") else SerialBatch(model)
+            trajectories = drive_batch(steps, batched, on_error=report_error)
+
+        group_seconds = time.monotonic() - group_started
+        for (instance, condition, seed), trajectory in zip(
+            [item[0] for item in opened], trajectories, strict=True
+        ):
+            done_count += 1
+            if trajectory is None:
+                continue
+            trajectory.save(config.trajectory_dir(instance, condition, seed))
+            labels = label(trajectory, config.env)
+            results.append(labels)
+            print(
+                f"  [{done_count}/{len(todo)}] {instance} {condition} seed={seed} "
+                f"{trajectory.meta.outcome} steps={labels.n_steps} t*={labels.t_star} "
+                f"cue={'y' if labels.read_cue else 'n'} "
+                f"{trajectory.meta.wall_clock_seconds:.0f}s",
+                flush=True,
+            )
         print(
-            f"  [{index}/{len(todo)}] {instance} {condition} seed={seed} "
-            f"{trajectory.meta.outcome} steps={labels.n_steps} t*={labels.t_star} "
-            f"cue={'y' if labels.read_cue else 'n'} "
-            f"{time.monotonic() - step_started:.0f}s",
+            f"  -- round of {len(opened)} in {group_seconds:.0f}s "
+            f"({group_seconds / len(opened):.0f}s per trajectory)",
             flush=True,
         )
 
-        if index % args.report_every == 0 and results:
-            print(f"\n--- after {index} ---")
+        if results:
+            print(f"\n--- after {done_count} ---")
             print(summarise(results, time.monotonic() - started))
             print(flush=True)
 
