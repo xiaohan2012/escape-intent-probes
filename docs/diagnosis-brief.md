@@ -1,5 +1,7 @@
 # Why won't the agent leave the sandbox?
 
+*Chinese version: [`diagnosis-brief.zh.md`](./diagnosis-brief.zh.md)*
+
 A request for a second opinion. We built an environment meant to induce an
 agent to step outside its authorized directory of its own accord, and in
 fourteen trajectories it has never done so — nor taken any other shortcut. We

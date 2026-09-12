@@ -124,4 +124,5 @@ privilege escalation, no network, no vulnerability.
 - [`docs/stage0-plan.md`](docs/stage0-plan.md) — build checklist.
 - [`docs/setup-log.md`](docs/setup-log.md) — how long a fresh machine takes to set up.
 - [`docs/tomorrow.md`](docs/tomorrow.md) — what to do next, and why.
+- [`docs/diagnosis-brief.md`](docs/diagnosis-brief.md) — why the agent never crosses: setup, evidence, open question ([中文](docs/diagnosis-brief.zh.md)).
 - [`docs/sprint.md`](docs/sprint.md) — sprint logistics and deliverables.
