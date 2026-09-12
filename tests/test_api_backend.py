@@ -22,7 +22,7 @@ import pytest
 
 from escape_probes.api_backend import APIModel, text_from_api_message, to_api_messages
 from escape_probes.config import BASH, EDIT, ModelConfig
-from escape_probes.model import Message, render_tool_call
+from escape_probes.model import Generation, Message, render_tool_call
 from escape_probes.tools import parse_tool_call
 
 
@@ -254,3 +254,73 @@ class TestAPIModel:
         model = APIModel(self.config, tools=(BASH,), transport=Empty())
         with pytest.raises(RuntimeError, match="no choices"):
             model.generate(self.conversation)
+
+
+class TestUsage:
+    """Test that a step records what the request actually cost.
+
+    The screen's whole budget rests on an estimate of tokens per trajectory, and
+    the estimate is quadratic in the step count because every step resends the
+    conversation — so it is the kind of number that is wrong by a factor of two
+    without anything looking wrong. The endpoint reports the real figure on every
+    response; recording it turns the estimate into a measurement after the first
+    trajectory rather than after the bill.
+    """
+
+    @property
+    def response(self) -> dict[str, Any]:
+        return {
+            "choices": [{"message": {"content": "thinking"}}],
+            "usage": {"prompt_tokens": 4096, "completion_tokens": 312},
+        }
+
+    def test_the_backend_passes_the_counts_through(self) -> None:
+        class WithUsage:
+            def post(self, payload: dict[str, Any]) -> dict[str, Any]:
+                return {
+                    "choices": [{"message": {"content": "thinking"}}],
+                    "usage": {"prompt_tokens": 4096, "completion_tokens": 312},
+                }
+
+        config = ModelConfig(backend="openrouter", model_id="minimax/minimax-m3")
+        generation = APIModel(config, tools=(BASH,), transport=WithUsage()).generate(
+            [Message(role="user", content="fix it")]
+        )
+        assert generation.prompt_tokens == 4096
+        assert generation.completion_tokens == 312
+
+    def test_a_response_without_usage_is_not_an_error(self) -> None:
+        # Not every provider reports it, and a missing count must cost the
+        # accounting rather than the trajectory.
+        config = ModelConfig(backend="openrouter", model_id="minimax/minimax-m3")
+        generation = APIModel(config, tools=(BASH,), transport=FakeTransport()).generate(
+            [Message(role="user", content="fix it")]
+        )
+        assert generation.prompt_tokens == 0
+        assert generation.completion_tokens == 0
+
+    def test_a_step_records_them(self) -> None:
+        # On the local path the counts are derivable from the spans; on this one
+        # there are no token ids at all, so the step is the only place they can
+        # live.
+        from escape_probes.trace import TrajectoryWriter
+
+        writer = TrajectoryWriter()
+        writer.add_step(
+            Generation(
+                prompt_token_ids=(),
+                gen_token_ids=(),
+                text="thinking",
+                prompt_tokens=4096,
+                completion_tokens=312,
+            )
+        )
+        assert writer.steps[0].prompt_tokens == 4096
+        assert writer.steps[0].completion_tokens == 312
+
+    def test_a_step_from_a_local_backend_reports_zero(self) -> None:
+        from escape_probes.trace import TrajectoryWriter
+
+        writer = TrajectoryWriter()
+        writer.add_step(Generation(prompt_token_ids=(1, 2), gen_token_ids=(3,), text="x"))
+        assert writer.steps[0].prompt_tokens == 0

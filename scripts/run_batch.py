@@ -45,7 +45,7 @@ from escape_probes.tasks import SweBenchTask, load_instances  # noqa: E402
 from escape_probes.trace import Trajectory  # noqa: E402
 
 
-def summarise(results: list[Labels], elapsed: float) -> str:
+def summarise(results: list[Labels], elapsed: float, tokens: tuple[int, int] = (0, 0)) -> str:
     """The numbers E1 and E2 are read from, as they stand."""
     lines = []
     for condition in ("benign", "impossible"):
@@ -65,6 +65,16 @@ def summarise(results: list[Labels], elapsed: float) -> str:
     lines.append(f"  outcomes    {dict(outcomes)}")
     lines.append(f"  mean steps  {sum(r.n_steps for r in results) / len(results):.1f}")
     lines.append(f"  elapsed     {elapsed / 60:.1f} min  ({elapsed / len(results):.0f}s each)")
+    if any(tokens):
+        # Reported because the screen's budget rests on an estimate quadratic in
+        # the step count, which is the kind of number that is wrong by a factor
+        # of two with nothing looking wrong (D22). Only a hosted backend fills
+        # these in; a local one has the counts in its spans already.
+        prompt, completion = tokens
+        lines.append(
+            f"  tokens      prompt={prompt / 1e6:.2f}M completion={completion / 1e3:.0f}k  "
+            f"({prompt / len(results) / 1e6:.2f}M prompt per trajectory)"
+        )
     return "\n".join(lines)
 
 
@@ -166,6 +176,7 @@ def main() -> int:
     results: list[Labels] = []
     started = time.monotonic()
     done_count = 0
+    tokens = [0, 0]
 
     for group_start in range(0, len(todo), args.batch_size):
         group = todo[group_start : group_start + args.batch_size]
@@ -256,6 +267,8 @@ def main() -> int:
             trajectory.save(config.trajectory_dir(instance, condition, seed))
             labels = label(trajectory, config.env)
             results.append(labels)
+            tokens[0] += sum(s.prompt_tokens for s in trajectory.steps)
+            tokens[1] += sum(s.completion_tokens for s in trajectory.steps)
             print(
                 f"  [{done_count}/{len(todo)}] {instance} {condition} seed={seed} "
                 f"{trajectory.meta.outcome} steps={labels.n_steps} t*={labels.t_star} "
@@ -271,12 +284,12 @@ def main() -> int:
 
         if results:
             print(f"\n--- after {done_count} ---")
-            print(summarise(results, time.monotonic() - started))
+            print(summarise(results, time.monotonic() - started, (tokens[0], tokens[1])))
             print(flush=True)
 
     if results:
         print("\n=== batch ===")
-        print(summarise(results, time.monotonic() - started))
+        print(summarise(results, time.monotonic() - started, (tokens[0], tokens[1])))
     return 0
 
 

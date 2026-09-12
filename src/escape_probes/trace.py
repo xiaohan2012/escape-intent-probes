@@ -72,6 +72,11 @@ class Step(BaseModel):
 
     exit_code: int | None = None
 
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    """As the server counted them, for a hosted backend. Zero elsewhere, where
+    `prompt_span` and `gen_span` already say it."""
+
     generate_seconds: float = 0.0
     """Time in the model. Together with `exec_seconds` this splits a step's cost
     between the two things that can be optimised independently — decode speed
@@ -182,6 +187,8 @@ class TrajectoryWriter:
             prompt_span=(0, len(prompt)),
             gen_span=(len(prompt), len(self.token_ids)),
             tool_start_token_idx=None if offset is None else len(prompt) + offset,
+            prompt_tokens=generation.prompt_tokens,
+            completion_tokens=generation.completion_tokens,
             **fields,
         )
         self.steps.append(step)

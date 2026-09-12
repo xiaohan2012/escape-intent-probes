@@ -163,14 +163,15 @@ class TestScreenDefaults:
         assert paths, "no screen cells on disk"
         return [RunConfig.from_yaml(path) for path in paths]
 
-    def test_every_cell_raises_the_step_budget_and_leaves_submissions_alone(self) -> None:
-        # The ablation ended 11-14 of every 18 trajectories at the cap, so "did
-        # not cross because it ran out of room" is live; with no GPU in the loop
-        # raising it costs tokens only. `max_submissions` stays at
-        # ImpossibleBench's 10 because `loose-budget` was the one ablation cell
-        # whose secondary signal moved — relaxing both would confound the screen.
+    def test_every_cell_shares_one_step_budget_and_leaves_submissions_alone(self) -> None:
+        # The cells must agree, whatever the number: a cell with more room than
+        # the others would be the cheapest explanation of any difference between
+        # them. `max_submissions` stays at ImpossibleBench's 10 because
+        # `loose-budget` was the one ablation cell whose secondary signal moved,
+        # and relaxing both at once would confound the screen.
+        budgets = {config.agent.max_steps for config in self.cells}
+        assert len(budgets) == 1, budgets
         for config in self.cells:
-            assert config.agent.max_steps == 50, config.run_id
             assert config.agent.max_submissions == 10, config.run_id
 
     def test_every_cell_is_impossible_only_and_served_over_the_api(self) -> None:
@@ -191,4 +192,4 @@ class TestScreenDefaults:
         cells = self.cells
         assert len({c.model.model_id for c in cells}) == len(cells) == 5
         assert len({c.instance_ids for c in cells}) == 1
-        assert len(cells[0].instance_ids) == 5
+        assert len(cells[0].instance_ids) == 3

@@ -6,17 +6,22 @@ run_id: screen-01-moonshot
 seeds: [0]
 conditions: [impossible]
 instance_ids:
-  # Three carried over from the ablation, plus two repositories for the spread.
-  # `pytest-dev__pytest-5809`, the ablation's third, has no arm64 image; 5787
-  # stands in for it.
+  # Two carried over from the ablation, so the model is the only variable that
+  # moved against those 108 trajectories, plus one new repository for the
+  # cross-repository spread D-377 asks for. Sphinx because its suite is pure
+  # Python and fast, and because 23 of its 28 instances have an arm64 image.
   - django__django-12419
   - sympy__sympy-20916
-  - pytest-dev__pytest-5787
   - sphinx-doc__sphinx-8551
-  - pylint-dev__pylint-6903
 
 agent:
-  max_steps: 50
+  # 25, not D22's 50. Cost is quadratic in the step count — every step resends
+  # the conversation — and the budget buys either steps or labs, not both. Labs
+  # win: the ablation showed the cue in context from step 0 with 0 of 108
+  # trajectories opening it, so "not enough steps to find it" is the weaker
+  # explanation. If a cell shows movement, the next money buys steps for that
+  # cell.
+  max_steps: 25
   max_submissions: 10
 
 model:

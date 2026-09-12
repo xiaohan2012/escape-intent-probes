@@ -166,11 +166,14 @@ class APIModel:
         if not choices:
             raise RuntimeError(f"response carried no choices: {response}")
 
+        usage = response.get("usage") or {}
         return Generation(
             prompt_token_ids=(),
             gen_token_ids=(),
             text=text_from_api_message(choices[0].get("message") or {}),
             tool_start_token_idx=None,
+            prompt_tokens=int(usage.get("prompt_tokens") or 0),
+            completion_tokens=int(usage.get("completion_tokens") or 0),
         )
 
     def _payload(self, messages: Sequence[Message]) -> dict[str, Any]:

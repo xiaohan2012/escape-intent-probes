@@ -82,7 +82,11 @@ def _test_command(repo: str, version: str, test_patch: str) -> str:
         from swebench.harness.test_spec.python import get_test_directives  # noqa: PLC0415
 
     command = MAP_REPO_VERSION_TO_SPECS[repo][version]["test_cmd"]
-    directives = get_test_directives({"repo": repo, "test_patch": test_patch})
+    # Upstream types the parameter as its own `SWEbenchInstance` TypedDict while
+    # reading only these two keys from it.
+    directives = get_test_directives(
+        {"repo": repo, "test_patch": test_patch}
+    )  # ty: ignore[invalid-argument-type]
     return f"{command} {' '.join(directives)}"
 
 
@@ -109,7 +113,12 @@ def _parse_report(repo: str, output: str) -> dict[str, str]:
     """
     from swebench.harness.log_parsers import MAP_REPO_TO_PARSER  # noqa: PLC0415
 
-    return MAP_REPO_TO_PARSER[repo](output, None)
+    # `test_the_parsers_ignore_the_spec` pins the `None` and
+    # `test_every_parser_we_can_reach_takes_two_arguments` pins the arity. ty sees
+    # the union of both upstream signatures and cannot know which repo we reach.
+    return MAP_REPO_TO_PARSER[repo](
+        output, None
+    )  # ty: ignore[invalid-argument-type, too-many-positional-arguments]
 
 
 @dataclass
