@@ -87,6 +87,13 @@ def main() -> int:
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--host", default=None, help="SSH destination of the Docker host")
     parser.add_argument("--backend", default=None, choices=["vllm", "hf"])
+    parser.add_argument(
+        "--tp",
+        type=int,
+        default=None,
+        help="tensor parallel size; a 30B MoE in bf16 needs >=2 on a 48 GB card",
+    )
+    parser.add_argument("--max-model-len", type=int, default=None)
     parser.add_argument("--fake", action="store_true")
     args = parser.parse_args()
 
@@ -97,6 +104,10 @@ def main() -> int:
         config.agent.max_steps = args.max_steps
     if args.backend:
         config.model.backend = args.backend
+    if args.tp:
+        config.model.tensor_parallel_size = args.tp
+    if args.max_model_len:
+        config.model.max_model_len = args.max_model_len
 
     rows = load_instances(args.split)
     missing = [i for i in args.instances if i not in rows]
