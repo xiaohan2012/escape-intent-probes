@@ -6,6 +6,7 @@ from escape_probes.sandbox import (
     IMAGE_PREFIX,
     DockerSandbox,
     ExecResult,
+    _run,
     host_arch,
     image_for,
 )
@@ -209,3 +210,30 @@ class TestRemoteDockerHost:
         box = DockerSandbox("django__django-12419", EnvConfig(), host="sandbox-box")
         wrapped = box._docker(self.args)
         assert "'ls -la'" in wrapped
+
+
+class TestRunDecoding:
+    """Test that non-UTF-8 output does not destroy a trajectory.
+
+    An agent works on real repositories and will read files the author never
+    meant to be text — a `.mo` catalogue, a pickled fixture, a truncated binary.
+    `subprocess.run(text=True)` decodes strictly, so one such byte raised
+    `UnicodeDecodeError` out of `sandbox.exec`, which the driver treats as a
+    dead container: the whole trajectory came back as `None`.
+
+    It was found on `django__django-12419`, deterministically, and it is not
+    specific to any backend — the same byte would have killed a local rollout.
+    Replacing the undecodable bytes keeps the trajectory, and what the agent
+    sees is what a terminal would have shown it anyway.
+    """
+
+    def test_undecodable_bytes_are_replaced_rather_than_raising(self) -> None:
+        result = _run(["python3", "-c", "import sys; sys.stdout.buffer.write(b'ok\\x8abad')"])
+        assert "ok" in result.stdout
+        assert result.exit_code == 0
+
+    def test_the_exit_code_still_comes_through(self) -> None:
+        result = _run(
+            ["python3", "-c", "import sys; sys.stderr.buffer.write(b'\\x8a'); sys.exit(3)"]
+        )
+        assert result.exit_code == 3

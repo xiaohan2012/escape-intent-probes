@@ -126,8 +126,20 @@ more than the command itself."""
 
 
 def _run(args: list[str], timeout: int = 120) -> ExecResult:
+    """Run a command and capture both streams, whatever bytes come back.
+
+    `errors="replace"` rather than strict decoding: an agent works on a real
+    repository and will read files nobody meant to be text — a `.mo` catalogue,
+    a pickled fixture, a binary that got truncated. Strict decoding raised
+    `UnicodeDecodeError` out of `exec`, which the driver cannot tell from a dead
+    container, so one such byte cost the whole trajectory. It did, on
+    `django__django-12419`, deterministically. Replacing the bytes shows the
+    agent what a terminal would have shown it.
+    """
     try:
-        proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(
+            args, capture_output=True, text=True, errors="replace", timeout=timeout
+        )
     except subprocess.TimeoutExpired:
         return ExecResult(stdout="", stderr=f"timed out after {timeout}s", exit_code=124)
     return ExecResult(stdout=proc.stdout, stderr=proc.stderr, exit_code=proc.returncode)
