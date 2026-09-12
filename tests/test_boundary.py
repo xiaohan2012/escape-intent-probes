@@ -2,7 +2,13 @@ import pytest
 
 from escape_probes.boundary import GRADER_HOST, exit_patch_path, render_cue
 from escape_probes.config import CueStrength, EnvConfig
-from escape_probes.sandbox import IMAGE_PREFIX, DockerSandbox, ExecResult, image_for
+from escape_probes.sandbox import (
+    IMAGE_PREFIX,
+    DockerSandbox,
+    ExecResult,
+    host_arch,
+    image_for,
+)
 
 
 class TestImageFor:
@@ -18,7 +24,59 @@ class TestImageFor:
     )
     def test_substitutes_the_double_underscore(self, instance_id: str, expected_tag: str) -> None:
         # `__` is not legal in a tag, so upstream writes `_1776_`.
-        assert image_for(instance_id) == f"{IMAGE_PREFIX}{expected_tag}:latest"
+        assert image_for(instance_id) == f"{IMAGE_PREFIX}{host_arch()}.{expected_tag}:latest"
+
+    @pytest.mark.parametrize(
+        "arch, expected",
+        [
+            ("x86_64", "swebench/sweb.eval.x86_64.django_1776_django-12419:latest"),
+            ("arm64", "swebench/sweb.eval.arm64.django_1776_django-12419:latest"),
+        ],
+    )
+    def test_the_architecture_selects_the_image(self, arch: str, expected: str) -> None:
+        # Upstream publishes an arm64 set alongside the x86_64 one, which is
+        # what lets the frontier screen run its sandboxes on a laptop (D22).
+        assert image_for("django__django-12419", arch=arch) == expected
+
+    def test_the_default_is_the_host(self) -> None:
+        assert image_for("sympy__sympy-20916") == image_for("sympy__sympy-20916", arch=host_arch())
+
+    def test_an_unknown_architecture_is_refused(self) -> None:
+        # Better than composing a name Docker Hub will 404 on after container
+        # setup has already started.
+        with pytest.raises(ValueError, match="unknown architecture"):
+            image_for("sympy__sympy-20916", arch="riscv64")
+
+
+class TestHostArch:
+    """Test the mapping from `platform.machine()` onto upstream's arch names.
+
+    Getting this wrong is silent in the expensive direction: an amd64 image on
+    an arm64 host runs under emulation, and a Django suite that then takes
+    minutes per invocation looks like a slow model rather than a wrong image.
+    """
+
+    @pytest.mark.parametrize(
+        "machine, expected",
+        [
+            ("x86_64", "x86_64"),
+            ("AMD64", "x86_64"),
+            ("amd64", "x86_64"),
+            ("arm64", "arm64"),
+            ("aarch64", "arm64"),
+        ],
+    )
+    def test_platform_names_map_onto_upstream_names(
+        self, machine: str, expected: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Three spellings reach the same architecture depending on the OS.
+        monkeypatch.setattr("platform.machine", lambda: machine)
+        assert host_arch() == expected
+
+    def test_an_unrecognised_machine_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("platform.machine", lambda: "s390x")
+        with pytest.raises(ValueError, match="unknown architecture"):
+            host_arch()
 
 
 class TestExecResult:

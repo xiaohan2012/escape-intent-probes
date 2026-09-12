@@ -1,5 +1,6 @@
 """Run a batch of trajectories, reporting as it goes.
 
+    uv run python scripts/run_batch.py --config configs/screen-01-moonshot.yaml
     uv run python scripts/run_batch.py --instances django__django-12419 \\
         --seeds 0 1 2 3 --limit 5
 
@@ -32,7 +33,12 @@ from escape_probes.boundary import plant  # noqa: E402
 from escape_probes.config import RunConfig  # noqa: E402
 from escape_probes.labels import Labels, label  # noqa: E402
 from escape_probes.model import ModelBackend  # noqa: E402
-from escape_probes.rollout import SerialBatch, drive_batch, rollout_steps  # noqa: E402
+from escape_probes.rollout import (  # noqa: E402
+    SerialBatch,
+    drive_batch,
+    drive_threaded,
+    rollout_steps,
+)
 from escape_probes.sandbox import DockerSandbox  # noqa: E402
 from escape_probes.tasks import SweBenchTask, load_instances  # noqa: E402
 from escape_probes.trace import Trajectory  # noqa: E402
@@ -73,8 +79,14 @@ def build_model(config: RunConfig, fake: bool) -> ModelBackend:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="a run config; its run_id, instances, conditions and seeds win over the flags below",
+    )
     parser.add_argument("--run-id", default="pilot-01")
-    parser.add_argument("--instances", nargs="+", required=True)
+    parser.add_argument("--instances", nargs="+", default=None)
     parser.add_argument("--conditions", nargs="+", default=["benign", "impossible"])
     parser.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2, 3])
     parser.add_argument("--split", default="conflicting", choices=["conflicting", "oneoff"])
@@ -93,7 +105,7 @@ def main() -> int:
     )
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--host", default=None, help="SSH destination of the Docker host")
-    parser.add_argument("--backend", default=None, choices=["vllm", "hf"])
+    parser.add_argument("--backend", default=None, choices=["vllm", "hf", "openrouter"])
     parser.add_argument(
         "--tp",
         type=int,
@@ -106,7 +118,17 @@ def main() -> int:
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    config = RunConfig(run_id=args.run_id, instance_ids=tuple(args.instances))
+    if args.config is not None:
+        config = RunConfig.from_yaml(args.config)
+        instances = list(config.instance_ids)
+        conditions = list(config.conditions)
+        seeds = list(config.seeds)
+    else:
+        if not args.instances:
+            print("pass --config or --instances", file=sys.stderr)
+            return 1
+        config = RunConfig(run_id=args.run_id, instance_ids=tuple(args.instances))
+        instances, conditions, seeds = args.instances, args.conditions, args.seeds
     if args.max_steps:
         config.agent.max_steps = args.max_steps
     if args.backend:
@@ -117,7 +139,7 @@ def main() -> int:
         config.model.max_model_len = args.max_model_len
 
     rows = load_instances(args.split)
-    missing = [i for i in args.instances if i not in rows]
+    missing = [i for i in instances if i not in rows]
     if missing:
         print(f"not in the {args.split} split: {missing}", file=sys.stderr)
         return 1
@@ -126,9 +148,9 @@ def main() -> int:
     # and condition rather than finishing one instance exhaustively.
     work = [
         (instance, condition, seed)
-        for seed in args.seeds
-        for instance in args.instances
-        for condition in args.conditions
+        for seed in seeds
+        for instance in instances
+        for condition in conditions
     ]
     todo = [w for w in work if not (config.trajectory_dir(*w) / "meta.json").exists()]
     done = len(work) - len(todo)
@@ -210,8 +232,19 @@ def main() -> int:
                 instance, condition, seed = opened[index][0]
                 print(f"  {instance} {condition} {seed}: FAILED {error}", flush=True)
 
-            batched = model if hasattr(model, "generate_batch") else SerialBatch(model)
-            trajectories = drive_batch(steps, batched, on_error=report_error)
+            # Which driver, decided by how the model is served rather than by
+            # whether it happens to expose `generate_batch`. A hosted endpoint
+            # has no batch dimension to fill, so lock step would make every
+            # trajectory wait for the round's slowest response and buy nothing;
+            # a local engine is the opposite case, where concurrency without a
+            # batch is threads fighting over one card (D22).
+            if config.model.backend == "openrouter":
+                trajectories = drive_threaded(
+                    steps, model, max_workers=len(steps), on_error=report_error
+                )
+            else:
+                batched = model if hasattr(model, "generate_batch") else SerialBatch(model)
+                trajectories = drive_batch(steps, batched, on_error=report_error)
 
         group_seconds = time.monotonic() - group_started
         for (instance, condition, seed), trajectory in zip(

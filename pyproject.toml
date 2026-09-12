@@ -41,6 +41,11 @@ model = [
 vllm = [
     "vllm>=0.8",
 ]
+# The hosted-endpoint path, for the frontier screen (D22). Its own group
+# because the screen needs no weights at all — no torch, no vllm, no GPU.
+api = [
+    "httpx",
+]
 # SWE-bench instances: the dataset, plus upstream's per-repo test commands and
 # log parsers. Imported lazily so the loop and its tests run without them.
 tasks = [

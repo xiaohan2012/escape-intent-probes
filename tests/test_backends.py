@@ -37,3 +37,8 @@ class TestBuildModel:
         config = ModelConfig.model_construct(backend="hf ")
         with pytest.raises(ValueError, match="unknown backend"):
             build_model(config, tools=("bash",))
+
+    def test_the_api_path_is_reachable_by_name(self) -> None:
+        # The screen's backend (D22). Dispatch is worth a test on its own: a
+        # YAML typo must fail at config load, not after the images are pulled.
+        assert ModelConfig(backend="openrouter").backend == "openrouter"

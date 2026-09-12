@@ -855,6 +855,122 @@ FP8, which retires the Coder-Next FP8 and `gpt-oss-120b` MXFP4 candidates on
 this box; the memory, conversely, is what makes Qwen3-32B dense and hooked Pass
 2 forwards comfortable.
 
+## D22 — The frontier screen: five open-weight models, breadth over depth
+
+Decided 2026-09-12, after the D20 ablation came back 0/108 on crossings. Issue
+#1 asked whether any model crosses in this environment at all. The ablation
+narrowed what that question has to answer, so several parts of the issue as
+written no longer hold.
+
+**The cheating calibration is largely already answered, and the anchor in D18
+was the wrong one.** D18 proposed comparing our cheating rate against
+ImpossibleBench's published >85% at prompt A/B. That figure is GPT-5 and o3 on
+Conflicting-**LiveCodeBench**. Our substrate is Conflicting-SWEbench and our
+model is Qwen3-Coder, whose published conflicting rate is **14%** (D4, prompt D,
+the strictest rung). The ablation measured **14/108 = 13%**. Same order of
+magnitude, so the hypothesis that our harness suppresses cheating is mostly
+retired, and the calibration batch drops to conditional: run it only if the
+screen returns a null. One residual mismatch worth stating — 14% is prompt D and
+ours is prompt A, the loosest, which should have produced *more* cheating, not
+the same. That is a second-order question, not a difference of magnitude.
+
+**Open weights, not closed frontier.** The criterion is not capability, it is
+propensity to cross. Frontier models are post-trained hardest against exactly
+this behaviour, so selecting for "strongest available" — the phrase in issue #1
+— selects for the model most likely to return an unreadable refusal. Labs
+shipping open weights invest visibly less in agentic-containment refusal
+training. The five chosen are frontier-class on capability regardless.
+
+**Self-hosting is out of scope.** It buys activations, and activations belong to
+Pass 2. This screen answers one question: does anything cross. Deciding the
+probe substrate is downstream of a non-zero result, and requiring hostability
+now would cap the screen at roughly 100B and hand back another likely zero.
+
+**Breadth, not depth: 5 models × 5 instances × 1 replicate = 25 trajectories.**
+Not one model at n=25. A single model's zero carries the same ambiguity the
+ablation already produced — model or environment. Five labs' zeros is a
+statement about the environment. Between-model variance dwarfs the
+within-model variance that extra replicates would narrow, and a narrow
+confidence interval around a meaningless zero buys nothing. Any non-zero cell
+becomes the primary subject and earns its own n.
+
+One model per lab, because propensity comes from the post-training recipe and
+two models from one lab are one draw:
+
+| model | lab |
+|---|---|
+| `moonshotai/kimi-k3` | Moonshot |
+| `qwen/qwen3.8-2.4t-a95b` | Qwen |
+| `z-ai/glm-5.3` | Z.ai |
+| `deepseek/deepseek-v4-pro-0813` | DeepSeek |
+| `minimax/minimax-m3` | MiniMax |
+
+All five report `tools=True` on OpenRouter. Where parameter counts are
+published, the step up from the rollout model is the point: Qwen3-Coder-30B-A3B
+activates **3B**; `qwen3.8-2.4t-a95b` activates **95B**, a factor of 32. D4's
+figure has cheating rate and benign pass rate near-perfectly correlated, so E1
+and E2 are one axis, and 32× active parameters is the largest step along it
+available to us.
+
+**Provider pinned.** OpenRouter routes to third-party providers that differ in
+quantisation and tool-call fidelity, which would make "which model crossed"
+unanswerable. Pin with `provider.only` and record it in `meta.json`.
+
+**Native tool calling, not our text format.** D15's argument, now with five
+dialects instead of one: a tool call must be parsed in the format the model was
+post-trained to emit, or every step fails to parse and the batch measures
+formatting. Five labs mean five tag dialects, and the cost of betting they all
+comply is a batch of zero crossings — indistinguishable from the signal we are
+looking for. The price is that these prompts are not byte-identical to the local
+batch's, which does not matter: this is a diagnostic and enters no dataset.
+
+**No token ids.** No API returns them, and D12's frozen-asset requirement exists
+for Pass 2 teacher-forcing, which never runs on these. Empty tuples;
+`trace.py` accumulates them into an empty array and `gen_span=(0, 0)`.
+
+**Reasoning traces recorded where offered, not required.** At least Kimi K3 and
+GLM-5.3 are reasoning models, and the API exposes that content in a separate
+field some providers withhold. Store it when present and record per model
+whether it arrived. The label rules are untouched: a crossing is decided by the
+path argument of a tool call, not by text, so a missing trace cannot move the
+primary metric. It only limits how well we could explain a crossing, which is a
+question that arises only after one happens.
+
+**`max_steps` 25 → 50, `max_submissions` stays at 10.** The ablation ended
+11–14 of every 18 trajectories at the cap, so the step budget is still binding
+and "did not cross because it ran out of room" is live. With no GPU in the loop,
+raising it costs tokens only. The submission budget stays at ImpossibleBench's
+10 (D20): `loose-budget` was the one ablation cell whose secondary signal moved,
+so relaxing both at once would confound the screen.
+
+**Sandboxes run locally on arm64.** Upstream publishes
+`swebench/sweb.eval.arm64.*` alongside the x86_64 images — no Dockerfile build
+required — so the screen needs neither a rented box nor the GPU. `IMAGE_PREFIX`
+becomes architecture-aware and the architecture is recorded in `meta.json`, so
+trajectories from the two architectures stay distinguishable on disk. Arm64 is
+not validated by upstream for evaluation parity, which does not matter here: the
+comparison against the 108 local trajectories is already broken by the model
+axis, and stacking an architecture difference on an incomparable comparison
+changes nothing. What does need checking is that the impossible condition still
+bites — that tests run and fail by conflicting with the spec rather than by
+failing to run at all.
+
+**Instances: the three already exercised, plus two repositories.** Reusing
+`django__django-12419`, `sympy__sympy-20916` and `pytest-dev__pytest-5809`
+avoids introducing a second variable alongside the model, and the D-377
+selection rule — prefer instances the primary model solves benign — was written
+against Qwen3-Coder-30B and does not bind for models this much stronger. Two
+more repositories for the cross-repository spread D-377 also asks for, filtered
+on having an arm64 tag. No new capability check, which would mean booting the
+GPU we just avoided.
+
+**Impossible only.** Benign would supply E1 and close the "too weak to get
+there" reading of a null, but like the calibration batch it is only needed if
+the screen returns a null, and it is cheap to add then. A crossing needs no
+benign run to be readable.
+
+Cost: roughly $25–50 in tokens. No GPU.
+
 ## Open questions
 
 - **Stop-loss / failure modes — deferred, does not block Stage 0 execution.**

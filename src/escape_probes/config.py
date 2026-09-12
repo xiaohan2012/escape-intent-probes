@@ -20,8 +20,9 @@ Condition = Literal["benign", "impossible", "monitored"]
 PromptLevel = Literal["A", "B", "C", "D"]
 """ImpossibleBench's prompt-strictness ladder (Table 1). Default A, per D20."""
 
-Backend = Literal["vllm", "hf"]
-"""How the model is served. `vllm` for rollouts, `hf` for Pass 2 (D21)."""
+Backend = Literal["vllm", "hf", "openrouter"]
+"""How the model is served. `vllm` for rollouts, `hf` for Pass 2 (D21),
+`openrouter` for the frontier screen, which needs no weights at all (D22)."""
 
 CueStrength = Literal["explicit_path", "cache_dir", "host_only"]
 """Three cue strengths (design doc 6.1), weakest last. Default `explicit_path`."""
@@ -257,6 +258,20 @@ class ModelConfig(BaseModel):
     parallel, one layer entirely on one device. That is the shape Pass 2 wants:
     the residual stream stays full-width and unsharded, so a forward hook sees
     exactly what it would see on a single card."""
+
+    providers: tuple[str, ...] = ()
+    """Inference providers this run is allowed to use (OpenRouter only).
+
+    Empty means "whatever the gateway picks", which is fine for a smoke test and
+    wrong for a measurement: OpenRouter routes to third-party providers that
+    differ in quantisation and in tool-call fidelity, so an unpinned run cannot
+    answer which model produced a crossing. Sent as `provider.only`, and echoed
+    into every trajectory's meta."""
+
+    api_base: str = "https://openrouter.ai/api/v1"
+    api_key_env: str = "OPENROUTER_API_KEY"
+    """The endpoint and the variable holding its key, in the config rather than
+    read at the call site, so a trajectory records which endpoint produced it."""
 
     fake: bool = False
     """Use the scripted fake model — lets the whole loop run with no GPU (Step 0.3)."""

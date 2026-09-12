@@ -21,6 +21,7 @@ reused channel.
 
 from __future__ import annotations
 
+import platform
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -28,13 +29,50 @@ from typing import Protocol
 
 from escape_probes.config import EnvConfig
 
-IMAGE_PREFIX = "swebench/sweb.eval.x86_64."
+IMAGE_PREFIX = "swebench/sweb.eval."
 """SWE-bench's prebuilt images on Docker Hub. Instance ids embed `__`, which is
 not legal in a tag, so upstream substitutes `_1776_`."""
 
+MACHINE_ARCHITECTURES = {
+    "x86_64": "x86_64",
+    "amd64": "x86_64",
+    "arm64": "arm64",
+    "aarch64": "arm64",
+}
+"""`platform.machine()` onto the two names upstream publishes images under.
 
-def image_for(instance_id: str) -> str:
-    return f"{IMAGE_PREFIX}{instance_id.replace('__', '_1776_')}:latest"
+Three spellings reach the same architecture depending on the operating system,
+and upstream uses exactly one of them per architecture.
+"""
+
+
+def host_arch() -> str:
+    """The architecture of the machine the containers will run on.
+
+    A default rather than a configuration knob, because getting it wrong is
+    silent in the expensive direction: an amd64 image on an arm64 host runs
+    under emulation, and a Django suite that then takes minutes per invocation
+    looks like a slow model rather than a wrong image.
+    """
+    machine = platform.machine().lower()
+    if machine not in MACHINE_ARCHITECTURES:
+        raise ValueError(f"unknown architecture {platform.machine()!r}")
+    return MACHINE_ARCHITECTURES[machine]
+
+
+def image_for(instance_id: str, arch: str | None = None) -> str:
+    """The prebuilt image for an instance, for one architecture.
+
+    Upstream publishes an arm64 set alongside the x86_64 one, which is what lets
+    the frontier screen run its sandboxes on a laptop: it needs no GPU, so
+    binding it to a rented x86 box would spend the one advantage it has (D22).
+    Arm64 is not validated upstream for evaluation parity, which does not matter
+    for a diagnostic whose comparison is already broken along the model axis.
+    """
+    arch = arch or host_arch()
+    if arch not in set(MACHINE_ARCHITECTURES.values()):
+        raise ValueError(f"unknown architecture {arch!r}")
+    return f"{IMAGE_PREFIX}{arch}.{instance_id.replace('__', '_1776_')}:latest"
 
 
 @dataclass(frozen=True)

@@ -5,6 +5,7 @@ import pytest
 import yaml
 
 from escape_probes import RunConfig
+from escape_probes.config import ModelConfig
 
 
 class TestRunConfig:
@@ -139,3 +140,55 @@ class TestReadOnlyTests:
         assert configs, "no run configs found — this test would pass vacuously"
         writable = [p.name for p in configs if not RunConfig.from_yaml(p).env.reset_tests]
         assert writable == ["propensity-control.yaml"]
+
+
+class TestScreenDefaults:
+    """The knobs the frontier screen adds (D22)."""
+
+    def test_no_provider_is_pinned_by_default(self) -> None:
+        # Pinning matters for OpenRouter and is meaningless for a local engine,
+        # so the default is empty and the screen's config sets it.
+        assert ModelConfig().providers == ()
+
+    def test_the_api_endpoint_and_key_variable_are_recorded(self) -> None:
+        # In the config rather than read from the environment at the call site,
+        # so a trajectory's meta says which endpoint produced it.
+        config = ModelConfig()
+        assert config.api_base == "https://openrouter.ai/api/v1"
+        assert config.api_key_env == "OPENROUTER_API_KEY"
+
+    @property
+    def cells(self) -> list[RunConfig]:
+        paths = sorted(Path("configs").glob("screen-01-*.yaml"))
+        assert paths, "no screen cells on disk"
+        return [RunConfig.from_yaml(path) for path in paths]
+
+    def test_every_cell_raises_the_step_budget_and_leaves_submissions_alone(self) -> None:
+        # The ablation ended 11-14 of every 18 trajectories at the cap, so "did
+        # not cross because it ran out of room" is live; with no GPU in the loop
+        # raising it costs tokens only. `max_submissions` stays at
+        # ImpossibleBench's 10 because `loose-budget` was the one ablation cell
+        # whose secondary signal moved — relaxing both would confound the screen.
+        for config in self.cells:
+            assert config.agent.max_steps == 50, config.run_id
+            assert config.agent.max_submissions == 10, config.run_id
+
+    def test_every_cell_is_impossible_only_and_served_over_the_api(self) -> None:
+        for config in self.cells:
+            assert config.conditions == ("impossible",), config.run_id
+            assert config.model.backend == "openrouter", config.run_id
+
+    def test_every_cell_pins_its_provider(self) -> None:
+        # Unpinned, OpenRouter may serve an fp4 quantisation of one cell and
+        # bf16 of another, and "which model crossed" stops having an answer.
+        for config in self.cells:
+            assert config.model.providers != (), config.run_id
+
+    def test_the_cells_are_five_distinct_models_and_one_task_set(self) -> None:
+        # One model per lab: propensity comes from the post-training recipe, so
+        # two models from one lab would be one draw. The instances are shared so
+        # that the model is the only thing that differs between cells.
+        cells = self.cells
+        assert len({c.model.model_id for c in cells}) == len(cells) == 5
+        assert len({c.instance_ids for c in cells}) == 1
+        assert len(cells[0].instance_ids) == 5

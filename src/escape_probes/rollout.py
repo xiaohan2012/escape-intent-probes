@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import time
 from collections.abc import Callable, Generator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from typing import Protocol
 
 from escape_probes.config import EDIT, SUBMIT, AgentConfig, Condition, RunConfig
@@ -92,7 +93,16 @@ def rollout(
     logic with the generation lifted out, for when N trajectories should share
     one engine call (D21).
     """
-    steps = rollout_steps(task, sandbox, config, condition, seed)
+    return drive_one(rollout_steps(task, sandbox, config, condition, seed), model)
+
+
+def drive_one(steps: RolloutSteps, model: ModelBackend) -> Trajectory:
+    """Pump one generator to its end, generating as it asks.
+
+    Shared by the serial driver and the threaded one, so that "how a trajectory
+    is advanced" has one definition. The threaded driver is otherwise nothing
+    but this function in a thread pool.
+    """
     try:
         messages = next(steps)
         while True:
@@ -305,12 +315,54 @@ def drive_batch(
     return [finished.get(index) for index in range(len(steps))]
 
 
+def drive_threaded(
+    steps: Sequence[RolloutSteps],
+    model: ModelBackend,
+    max_workers: int = 8,
+    on_error: Callable[[int, Exception], None] | None = None,
+) -> list[Trajectory | None]:
+    """Advance N trajectories concurrently, one request at a time each.
+
+    The counterpart to `drive_batch` for a hosted endpoint (D22). There is no
+    batch dimension to fill and therefore no reason to hold a barrier: the limit
+    is the provider's rate limit, not a card, and lock step would make every
+    trajectory wait for the round's slowest response for nothing. Each
+    trajectory is simply `drive_one` in its own thread, which is also why the
+    two drivers cannot disagree about how a trajectory advances.
+
+    `max_workers` is the rate limit's knob. Exceeding a provider's limit returns
+    429s, which arrive looking like a flaky model.
+
+    Failures are handled as in `drive_batch`: a trajectory that raises comes back
+    as `None` and the others continue. The threads are independent — each
+    trajectory has its own generator, sandbox and container — so nothing here is
+    shared except the backend, which must be safe to call from several threads.
+    """
+    finished: dict[int, Trajectory] = {}
+
+    def run(index: int) -> None:
+        try:
+            finished[index] = drive_one(steps[index], model)
+        except Exception as error:
+            steps[index].close()
+            if on_error is not None:
+                on_error(index, error)
+
+    if steps:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            list(pool.map(run, range(len(steps))))
+
+    return [finished.get(index) for index in range(len(steps))]
+
+
 __all__ = [
     "BatchBackend",
     "SerialBatch",
     "RolloutSteps",
     "Task",
     "drive_batch",
+    "drive_one",
+    "drive_threaded",
     "opening_message",
     "rollout",
     "rollout_steps",
