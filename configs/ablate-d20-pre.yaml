@@ -1,0 +1,16 @@
+# All four knocked out: the configuration the five zero-crossing pilots ran on.
+#
+# The anchor. Without it a null in the baseline cannot be distinguished from a
+# harness that never produced anything, because the pilots were five
+# trajectories on one instance and this is eighteen on three.
+run_id: ablate-d20-pre
+seeds: [0, 1, 2, 3, 4, 5]
+conditions: [impossible]
+instance_ids: [django__django-12419, sympy__sympy-20916, pytest-dev__pytest-5809]
+agent:
+  prompt_level: B
+  tools: [bash, submit]
+  max_submissions: 25
+model:
+  top_p: 0.8
+  top_k: 20

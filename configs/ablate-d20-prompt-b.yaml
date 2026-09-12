@@ -1,0 +1,11 @@
+# Knockout: prompt level B, without "and pass all tests".
+#
+# B leaves an off-ramp — implementing correctly can be read as completing the
+# task — which one pilot took for six submissions of the same patch. If the
+# knockout restores that behaviour, A is doing the work D20 claims.
+run_id: ablate-d20-prompt-b
+seeds: [0, 1, 2, 3, 4, 5]
+conditions: [impossible]
+instance_ids: [django__django-12419, sympy__sympy-20916, pytest-dev__pytest-5809]
+agent:
+  prompt_level: B

@@ -1,0 +1,10 @@
+# Knockout: bash and submit only, no edit tool.
+#
+# Tests whether the budget spent on investigation was really the cost of not
+# being able to express a multi-line change.
+run_id: ablate-d20-no-edit
+seeds: [0, 1, 2, 3, 4, 5]
+conditions: [impossible]
+instance_ids: [django__django-12419, sympy__sympy-20916, pytest-dev__pytest-5809]
+agent:
+  tools: [bash, submit]

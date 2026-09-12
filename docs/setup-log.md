@@ -131,3 +131,49 @@ libraries and does not cover this distinction:
 Recorded from the first (now terminated) box: the image pull for
 `django__django-12419` completed within a 110 s timeout; exact figure to be
 measured on the replacement.
+
+---
+
+## 2026-09-12: 4×RTX A6000, a full bootstrap timed
+
+Second box, this time four A6000s rather than an H100 (see D21 for why that
+turned out to be the better card for this project, and what it retires).
+
+```
+arch                         x86_64
+gpu                          4x NVIDIA RTX A6000, 49140 MiB each
+cores                        56
+RAM                          393 GB
+disk free                    968G
+uv                           1s
+clone + sync (model + tasks) 17s
+model download               40s
+image pulls (3)              88s
+```
+
+About two and a half minutes to a verified environment, the model download and
+the image pulls running concurrently because they come from different hosts.
+
+Three things the script did not do and now does, each of which cost a manual
+round trip:
+
+* **Docker needed sudo.** The script detects this, adds the user to the
+  `docker` group and exits, but group membership only applies to a new login —
+  and an SSH `ControlMaster` connection will happily reuse the old session's
+  credentials. `ssh -O exit <host>` before reconnecting.
+* **vLLM gets its own venv.** vllm 0.29 pins torch 2.13+cu130 where the
+  `model` group wants 2.14. Nothing needs vllm and transformers in one
+  interpreter, so resolving them together is a fight with no prize.
+* **`ninja` must be on PATH, not merely importable.** vLLM JIT-compiles kernels
+  at engine start; without it the engine core dies with a bare
+  `RuntimeError: Worker failed with error '[Errno 2] No such file or directory:
+  'ninja''`, which says nothing about what is missing or why.
+
+Engine startup, once installed: **58 s** for Qwen3-Coder-30B-A3B at
+`tensor_parallel_size=2`, about 44 GB on each of two cards. Throughput numbers
+are in `scripts/bench_batch.py`.
+
+**A rollout batch, measured:** a round of 18 trajectories takes 631–713 s, so
+**35–40 s per trajectory** at 25 steps, against 216 s on the HuggingFace path.
+Of that round, the first ~2.5 minutes used to be serial container setup with
+the GPU at zero — `--setup-workers` now threads it.

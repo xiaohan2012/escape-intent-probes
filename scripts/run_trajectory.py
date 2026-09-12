@@ -50,9 +50,9 @@ FAKE_SCRIPT = [
 def build_model(fake: bool, config: RunConfig) -> ModelBackend:
     if fake:
         return FakeModel(FAKE_SCRIPT)
-    from escape_probes.hf_backend import HFModel  # noqa: PLC0415
+    from escape_probes.backends import build_model as build  # noqa: PLC0415
 
-    return HFModel(config.model, tools=config.agent.tools)
+    return build(config.model, tools=config.agent.tools)
 
 
 def main() -> int:
@@ -62,6 +62,7 @@ def main() -> int:
     parser.add_argument("--split", default="conflicting", choices=["conflicting", "oneoff"])
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--run-id", default="smoke")
+    parser.add_argument("--backend", default=None, choices=["vllm", "hf"])
     parser.add_argument("--fake", action="store_true", help="scripted model, no GPU")
     parser.add_argument("--host", default=None, help="SSH destination of the Docker host")
     parser.add_argument("--max-steps", type=int, default=None)
@@ -74,6 +75,8 @@ def main() -> int:
     config = RunConfig(run_id=args.run_id)
     if args.max_steps:
         config.agent.max_steps = args.max_steps
+    if args.backend:
+        config.model.backend = args.backend
     elif args.fake:
         # The scripted model raises when it runs out, which is the right
         # behaviour in a test but noise in a smoke run.
@@ -81,7 +84,7 @@ def main() -> int:
 
     print(f"loading {args.split}/{args.instance} …", flush=True)
     row = load_instances(args.split)[args.instance]
-    task = SweBenchTask(row=row, condition=condition)
+    task = SweBenchTask(row=row, condition=condition, reset_tests=config.env.reset_tests)
     print(f"  test command: {task.test_command}", flush=True)
 
     model = build_model(args.fake, config)

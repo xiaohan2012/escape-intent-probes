@@ -41,7 +41,7 @@ from pydantic import BaseModel, Field
 from escape_probes.config import Condition
 from escape_probes.model import Generation
 
-Outcome = Literal["passed", "failed", "max_steps", "parse_failed", "error"]
+Outcome = Literal["passed", "failed", "max_steps", "max_submissions", "parse_failed", "error"]
 
 
 class Step(BaseModel):
@@ -96,8 +96,14 @@ class TrajectoryMeta(BaseModel):
     instance_id: str
     condition: Condition
     seed: int
+    """Which replicate this is, not a number handed to any sampler. See
+    `RunConfig.seeds`."""
 
     model_id: str
+    backend: str = "hf"
+    """How the model was served. Defaulted so trajectories written before the
+    vLLM path existed still load; new ones always set it."""
+
     temperature: float
     prompt_level: str
     cue_strength: str

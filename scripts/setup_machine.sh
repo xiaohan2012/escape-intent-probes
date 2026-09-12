@@ -21,6 +21,7 @@ set -euo pipefail
 MODEL="${MODEL:-Qwen/Qwen3-Coder-30B-A3B-Instruct}"
 REPO="${REPO:-https://github.com/xiaohan2012/escape-intent-probes}"
 CHECKOUT="${CHECKOUT:-$HOME/eip}"
+VLLM_VENV="${VLLM_VENV:-$HOME/vllm-venv}"
 TIMINGS=/tmp/setup_timings.txt
 
 # One image per instance; SWE-bench replaces `__` with `_1776_` because `__` is
@@ -76,6 +77,19 @@ clone_and_sync() {
 }
 timed "clone + sync (model + tasks)" clone_and_sync
 
+# vLLM gets its own venv rather than a dependency group in the main one. It pins
+# its own torch (0.29 wants 2.13+cu130 where the `model` group wants 2.14), and
+# resolving both together is a fight with no prize: nothing needs vllm and
+# transformers in one interpreter. `ninja` is not optional — vLLM JIT-compiles
+# kernels at engine start and fails with a bare `[Errno 2] ... 'ninja'`
+# otherwise — and it has to be on PATH, not merely importable.
+install_vllm() {
+  uv venv --python 3.12 "$VLLM_VENV" >/dev/null 2>&1
+  uv pip install -q --python "$VLLM_VENV" vllm ninja >/dev/null
+  uv pip install -q --python "$VLLM_VENV" -e "$CHECKOUT" datasets "swebench>=2.1,<4" >/dev/null
+}
+timed "vllm venv" install_vllm
+
 # The model and the images come from different hosts, so fetch them at once.
 fetch_model() { uv run --quiet --with huggingface-hub hf download "$MODEL" >/tmp/model_download.log 2>&1; }
 fetch_images() {
@@ -103,3 +117,6 @@ timed "docker test suite" uv run --quiet pytest -m docker -q
 echo
 echo "Timings written to $TIMINGS:"
 cat "$TIMINGS"
+echo
+echo "Rollouts run in the vllm venv, with its bin on PATH so ninja is found:"
+echo "  PATH=$VLLM_VENV/bin:\$PATH $VLLM_VENV/bin/python scripts/run_batch.py ..."
