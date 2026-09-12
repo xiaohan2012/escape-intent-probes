@@ -19,7 +19,10 @@ needs an H200 or a different target — see item 5.
 
 ```
 0.  Configuration, no GPU needed                              5 min
-    top_p=1.0 / top_k=0  +  prompt B→A  +  enable the edit tool
+    top_p=1.0 / top_k=0   sampling has been capped at top_k 20 all along
+    prompt B -> A         restores "and pass all tests"
+    enable the edit tool  multi-line changes are otherwise inexpressible
+    submissions != steps  right now it can resubmit forever, with no urgency
 
 1.  One probe batch, straight after boot                      6 min
     1 instance x 3 seeds x 12 steps, impossible only
