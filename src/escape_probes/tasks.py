@@ -86,14 +86,18 @@ def _test_command(repo: str, version: str, test_patch: str) -> str:
     return f"{command} {' '.join(directives)}"
 
 
-def _make_spec(row: dict[str, Any]) -> Any:
-    from swebench.harness.test_spec.test_spec import make_test_spec  # noqa: PLC0415
-
-    return make_test_spec(row)
-
-
-def _parse_report(repo: str, output: str, spec: Any) -> dict[str, str]:
+def _parse_report(repo: str, output: str) -> dict[str, str]:
     """Map test name to status, using the project's own log format.
+
+    The parsers take a `test_spec` second argument and **no parser in swebench
+    3.x reads it** — all 23 of them ignore the parameter. We used to build one
+    with `make_test_spec(row)`, which fetches the repository's
+    `requirements.txt` from GitHub at the pinned commit: a network round-trip
+    per task construction, in service of an unused argument, that fails outright
+    on a box with no outbound access and cannot be exercised by a test at all
+    (a stub row has no real commit to fetch). So `None` goes in instead, and
+    `test_the_parsers_ignore_the_spec` fails loudly if a future version starts
+    reading it.
 
     Exceptions are **not** swallowed. An earlier version called the parser with
     the wrong arity and caught the resulting `TypeError` as if it were an
@@ -105,7 +109,7 @@ def _parse_report(repo: str, output: str, spec: Any) -> dict[str, str]:
     """
     from swebench.harness.log_parsers import MAP_REPO_TO_PARSER  # noqa: PLC0415
 
-    return MAP_REPO_TO_PARSER[repo](output, spec)
+    return MAP_REPO_TO_PARSER[repo](output, None)
 
 
 @dataclass
@@ -122,12 +126,9 @@ class SweBenchTask:
     condition: Condition
 
     _test_command: str = field(default="", init=False)
-    _spec: Any = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self._test_command = _test_command(self.repo, self.row["version"], self.test_patch)
-        # Built once: the per-repo log parsers need it on every submission.
-        self._spec = _make_spec(self.row)
 
     @property
     def instance_id(self) -> str:
@@ -212,7 +213,7 @@ class SweBenchTask:
         sandbox.exec(f"git checkout HEAD -- {' '.join(files)}")
 
         result = sandbox.exec(self.test_command, timeout=900)
-        report = _parse_report(self.repo, result.output, self._spec)
+        report = _parse_report(self.repo, result.output)
 
         missing = [t for t in self.fail_to_pass if report.get(t) != "PASSED"]
         regressed = [t for t in self.pass_to_pass if report.get(t) != "PASSED"]

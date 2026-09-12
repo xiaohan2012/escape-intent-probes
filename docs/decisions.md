@@ -796,6 +796,65 @@ the only evidence against a larger budget is the looping sympy trajectory above
 the `edit` tool has been exercised and the loop is fast enough for 40 steps to
 be cheap.
 
+## D21 — vLLM for rollouts, `transformers` for Pass 2
+
+The HuggingFace path was chosen under D13 on the grounds that it should run
+first and a measurement should decide whether more was needed. The measurement:
+model time **94%** of wall clock, sandbox 6%, decode **16 tok/s**, GPU
+utilisation **34%**, per-token cost flat at ~68 ms as the context doubled from
+1.7k to 3.4k tokens. So prefill contributes almost nothing, the card is idle,
+and 3.6 minutes per trajectory makes a nine-trajectory batch 45 minutes — too
+slow to iterate on a task setting that is still being found rather than
+validated.
+
+Decode is memory-bandwidth bound: reading the weights for one token costs about
+the same whether one sequence is decoding or sixteen. The idle fraction is
+therefore not a tuning problem but an unused batch dimension, and that is what
+vLLM supplies.
+
+**Both backends stay.** vLLM does not expose forward hooks on the residual
+stream, so whatever performs Pass 2 will be a `transformers` model. `hf` is also
+the reference implementation when a vLLM trajectory looks wrong. What must not
+happen is the two drifting: a prompt rendered differently by the two makes their
+trajectories incomparable while looking identical in every log we keep. So the
+tool schemas, the chat-template rendering and the position-(b) mapping moved
+into `chat.py`, tested once against a stub tokenizer, and both backends call
+them.
+
+That extraction immediately paid for itself. Putting a test on the position-(b)
+mapping exposed a `>=` where a `>` belongs: the HuggingFace backend had been
+returning the token *before* the tool call's command string. The index was in
+range, nothing downstream complained, and every probe would have been trained
+one token early. It was never observable at the scale we had run, which is the
+argument for extracting shared code rather than copying it.
+
+`model.backend` is recorded in every trajectory's meta. A run that says which
+model it used but not how it was served is not reproducible, and the two paths
+will not produce identical token streams in every case.
+
+**Concurrency, staged.** Serial vLLM first, to prove the install and the wiring
+against a number. Then a lock-step driver: turn `rollout` into a generator that
+yields the conversation and receives a `Generation`, so a driver can collect one
+prompt per live trajectory and hand the whole round to a single
+`llm.generate([...])`. The generator frame keeps every per-trajectory local
+variable, so the loop's logic is not rewritten — and there are no threads and no
+asyncio, which matters because a nondeterministic interleaving is much harder to
+read when a trajectory looks wrong.
+
+The known cost of lock-step is a barrier per round: the round waits for the
+slowest generation, and the GPU idles while the round's sandbox commands run.
+The alternative — one thread per trajectory against an async engine, with no
+barrier — has better utilisation and worse debuggability. Measure the barrier
+before paying for it.
+
+On the hardware actually rented (4×RTX A6000, 48 GB each): the 30B MoE in bf16
+is ~60 GB, so `tensor_parallel_size` must be at least 2. Two TP=2 engines are
+preferable to one TP=4 — the all-reduce runs over PCIe with no NVLink, and the
+checkpoint has few enough KV heads that TP=4 leaves one per rank. Ampere has no
+FP8, which retires the Coder-Next FP8 and `gpt-oss-120b` MXFP4 candidates on
+this box; the memory, conversely, is what makes Qwen3-32B dense and hooked Pass
+2 forwards comfortable.
+
 ## Open questions
 
 - **Stop-loss / failure modes — deferred, does not block Stage 0 execution.**

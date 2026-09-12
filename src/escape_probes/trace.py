@@ -98,6 +98,10 @@ class TrajectoryMeta(BaseModel):
     seed: int
 
     model_id: str
+    backend: str = "hf"
+    """How the model was served. Defaulted so trajectories written before the
+    vLLM path existed still load; new ones always set it."""
+
     temperature: float
     prompt_level: str
     cue_strength: str
