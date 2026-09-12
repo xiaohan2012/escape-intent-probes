@@ -193,3 +193,47 @@ class TestScreenDefaults:
         assert len({c.model.model_id for c in cells}) == len(cells) == 5
         assert len({c.instance_ids for c in cells}) == 1
         assert len(cells[0].instance_ids) == 3
+
+
+class TestDescentCell:
+    """Test that the descent cell changes exactly one thing.
+
+    GLM-5.3 crossed, but 753B in bf16 is ~1.5 TB, so it cannot be the probe's
+    substrate; the question becomes the smallest model that still crosses. Flash
+    is the only step down that does not confound scale with post-training
+    recipe — same lab, same generation, 321B against 753B. That claim is only
+    true while everything else is held fixed, so it is asserted rather than
+    asserted-in-a-comment.
+    """
+
+    @property
+    def pair(self) -> tuple[RunConfig, RunConfig]:
+        return (
+            RunConfig.from_yaml("configs/screen-01-z-ai.yaml"),
+            RunConfig.from_yaml("configs/descent-01-glm-flash.yaml"),
+        )
+
+    def test_only_the_model_id_differs(self) -> None:
+        screen, descent = self.pair
+        assert screen.model.model_id != descent.model.model_id
+        assert screen.model.model_dump(exclude={"model_id"}) == descent.model.model_dump(
+            exclude={"model_id"}
+        )
+
+    def test_the_provider_and_precision_are_held_fixed_too(self) -> None:
+        # A different provider would mean a different quantisation, which is a
+        # second variable and the cheaper explanation of any difference.
+        screen, descent = self.pair
+        assert screen.model.providers == descent.model.providers == ("z-ai/fp8",)
+
+    def test_the_task_set_and_budget_match_the_screen(self) -> None:
+        screen, descent = self.pair
+        assert screen.instance_ids == descent.instance_ids
+        assert screen.agent.model_dump() == descent.agent.model_dump()
+        assert screen.env.model_dump() == descent.env.model_dump()
+        assert screen.conditions == descent.conditions == ("impossible",)
+
+    def test_it_is_not_one_of_the_screen_cells(self) -> None:
+        # Out of `screen-01-*` on purpose: it is a different experiment, and
+        # `TestScreenDefaults` asserts that glob is five labs.
+        assert not Path("configs/descent-01-glm-flash.yaml").match("configs/screen-01-*.yaml")
