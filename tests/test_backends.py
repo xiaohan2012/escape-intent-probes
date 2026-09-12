@@ -13,21 +13,27 @@ from escape_probes.config import ModelConfig
 
 
 class TestBuildModel:
-    def test_an_unknown_backend_is_refused(self) -> None:
-        config = ModelConfig()
-        config.backend = "trt"  # type: ignore[assignment]
+    def test_the_default_is_the_rollout_path(self) -> None:
+        # vLLM, per D21. A default of `hf` would silently give back the 16 tok/s
+        # path, and the speed work would look like it had not landed.
+        assert ModelConfig().backend == "vllm"
+
+    def test_the_config_layer_rejects_an_unknown_backend(self) -> None:
+        # First line of defence: `Backend` is a Literal, so a typo in a YAML run
+        # config fails at load rather than after the images are pulled.
+        with pytest.raises(Exception, match="backend"):
+            ModelConfig.model_validate({"backend": "trt"})
+
+    def test_the_factory_refuses_one_too(self) -> None:
+        # Second line: `model_construct` skips validation, which is how a value
+        # could reach the factory anyway. It must raise rather than fall through
+        # to `None`, and it must raise *before* importing anything — otherwise a
+        # typo on a fresh box reports a missing dependency instead.
+        config = ModelConfig.model_construct(backend="trt")
         with pytest.raises(ValueError, match="unknown backend"):
             build_model(config, tools=("bash",))
 
-    def test_the_default_is_the_rollout_path(self) -> None:
-        # vLLM, per D21. A default of `hf` would silently give back the 16 tok/s
-        # path and the speed work would look like it had not landed.
-        assert ModelConfig().backend == "vllm"
-
-    def test_a_bad_backend_fails_before_any_import(self) -> None:
-        # The check must not depend on `vllm` or `transformers` being installed,
-        # or a typo on a fresh box reports a missing dependency instead.
-        config = ModelConfig()
-        config.backend = "hf "  # type: ignore[assignment]
-        with pytest.raises(ValueError):
+    def test_whitespace_is_not_quietly_accepted(self) -> None:
+        config = ModelConfig.model_construct(backend="hf ")
+        with pytest.raises(ValueError, match="unknown backend"):
             build_model(config, tools=("bash",))

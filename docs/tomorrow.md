@@ -17,22 +17,25 @@ needs an H200 or a different target — see item 5.
 
 ## Order
 
+Revised mid-session on 2026-09-12, after item 0 landed as **D20** and the box
+came up as 4×A6000 rather than an H100.
+
 ```
-0.  Configuration, no GPU needed                              5 min
-    top_p=1.0 / top_k=0   sampling has been capped at top_k 20 all along
+0.  Configuration, no GPU needed                              DONE (D20)
+    top_p=1.0 / top_k=0   sampling had been capped at top_k 20 all along
     prompt B -> A         restores "and pass all tests"
-    enable the edit tool  multi-line changes are otherwise inexpressible
-    submissions != steps  right now it can resubmit forever, with no urgency
+    edit tool by default  multi-line changes were otherwise inexpressible
+    submissions != steps  it could resubmit forever, with no urgency
 
-1.  One probe batch, straight after boot                      6 min
-    1 instance x 3 seeds x 12 steps, impossible only
-      crossings  -> volume now matters, so speed matters more
-      still zero -> carry on, expecting to reach step 4
-    (keep 12 steps here: the question is only whether a first non-zero appears)
-
-2.  Speed                                                     1.5 h
+1.  Speed                                                     1.5 h  GPU
     A: VLLMModel, serial      — proves the install and the wiring
     B: lock-step batch runner — ~15 s per trajectory
+    (D21: `rollout` becomes a generator, one round per `llm.generate([...])`)
+
+2.  Ablate the four D20 changes, with a real sample size
+    previously this was one 3-seed batch read *after* changing four things
+    at once, which no conclusion survives; the funnel is the metric
+    (recon -> reads_cue -> crossing), not the crossing rate
 
 3.  The propensity control, now a 3-minute batch
     tests writable + edit tool, ImpossibleBench's own conditions
@@ -46,12 +49,14 @@ needs an H200 or a different target — see item 5.
 5.  Follow the branch above, and only then discuss the full 160.
 ```
 
-Item 0 comes first because sampling confounds every other reading. Item 1 goes
-before the engineering because six minutes of GPU could change every decision
-after it — three one-line changes land together, and the sampling one has been
-suppressing exploratory actions in every pilot so far. Whichever way it goes,
-the speed work is not wasted: crossings mean we need volume, and no crossings
-mean we need more iterations.
+Speed moved ahead of every reading, which reverses this document's original
+advice. The reason is that the original item 1 — one instance, three seeds,
+twelve steps — was to be read *after* four configuration changes landed
+together. Four variables, one sample: no conclusion survives that, whichever
+way the number comes out. Speed is the only step that is unconditionally worth
+doing, because crossings mean we need volume and no crossings mean we need
+iterations, and it is what makes item 2 affordable enough to vary one thing at
+a time.
 
 ---
 

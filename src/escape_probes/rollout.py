@@ -26,10 +26,11 @@ from __future__ import annotations
 
 import hashlib
 import time
+from collections.abc import Generator, Sequence
 from typing import Protocol
 
 from escape_probes.config import EDIT, SUBMIT, AgentConfig, Condition, RunConfig
-from escape_probes.model import Message, ModelBackend
+from escape_probes.model import Generation, Message, ModelBackend
 from escape_probes.prompts import failed_submission_prompt, retry_prompt, system_prompt
 from escape_probes.sandbox import Sandbox
 from escape_probes.tools import ToolParseError, apply_edit, parse_tool_call, truncate
@@ -70,6 +71,11 @@ def opening_message(task: Task, sandbox: Sandbox, agent: AgentConfig) -> str:
     )
 
 
+RolloutSteps = Generator[list[Message], Generation, Trajectory]
+"""What `rollout_steps` is: it yields the conversation to generate from, is sent
+back the `Generation`, and returns the finished `Trajectory`."""
+
+
 def rollout(
     task: Task,
     model: ModelBackend,
@@ -78,6 +84,42 @@ def rollout(
     condition: Condition,
     seed: int,
 ) -> Trajectory:
+    """One trajectory, generating serially. The reference driver.
+
+    Kept as the simple entry point because most things that read a trajectory
+    want one trajectory: the smoke script, the docker tests, anything
+    diagnosing a single run. `rollout_steps` plus `drive_batch` is the same
+    logic with the generation lifted out, for when N trajectories should share
+    one engine call (D21).
+    """
+    steps = rollout_steps(task, sandbox, config, condition, seed)
+    try:
+        messages = next(steps)
+        while True:
+            messages = steps.send(model.generate(messages))
+    except StopIteration as finished:
+        return finished.value
+
+
+def rollout_steps(
+    task: Task,
+    sandbox: Sandbox,
+    config: RunConfig,
+    condition: Condition,
+    seed: int,
+) -> RolloutSteps:
+    """The loop, with generation lifted out to the caller.
+
+    A generator rather than a state-machine class, because every local variable
+    here — the message list, the parse-error counter, the submission count, the
+    writer — is per-trajectory state that the generator frame keeps for free.
+    Writing it as a class would mean re-deriving that state as fields and
+    getting the control flow right by hand, for no gain (D21).
+
+    `generate_seconds` is now measured around the `yield`, so under a batching
+    driver it includes any wait for the round's slowest sequence. That is the
+    number worth having: it is what the barrier actually costs.
+    """
     agent = config.agent
     prompt = system_prompt(agent, task.test_command)
     messages = [
@@ -93,7 +135,7 @@ def rollout(
 
     for _ in range(agent.max_steps):
         generate_started = time.monotonic()
-        generation = model.generate(messages)
+        generation = yield messages
         generate_seconds = round(time.monotonic() - generate_started, 2)
         messages.append(Message(role="assistant", content=generation.text))
 
@@ -184,4 +226,55 @@ def rollout(
     return Trajectory(meta=meta, steps=writer.steps, token_ids=writer.token_ids)
 
 
-__all__ = ["Task", "opening_message", "rollout"]
+class BatchBackend(Protocol):
+    """A backend that can generate for several conversations in one call."""
+
+    def generate_batch(self, conversations: Sequence[Sequence[Message]]) -> list[Generation]: ...
+
+
+def drive_batch(steps: Sequence[RolloutSteps], model: BatchBackend) -> list[Trajectory]:
+    """Advance N trajectories in lock step, one engine call per round.
+
+    Each round collects the current conversation from every live trajectory and
+    hands the whole list to `generate_batch`, so vLLM does its own continuous
+    batching and there is no padding or ragged-length bookkeeping here.
+    Trajectories leave the round as they finish, and the returned list is in the
+    order given regardless of the order they finished in.
+
+    The known cost is the barrier: a round waits for its slowest generation, and
+    the sandbox commands of a round run while the GPU has nothing to do. Both
+    are visible in the data — `generate_seconds` absorbs the first and
+    `exec_seconds` the second — which is the point of measuring before replacing
+    this with something that has no barrier (D21).
+    """
+    finished: dict[int, Trajectory] = {}
+    pending: dict[int, list[Message]] = {}
+
+    for index, generator in enumerate(steps):
+        try:
+            pending[index] = next(generator)
+        except StopIteration as done:
+            finished[index] = done.value
+
+    while pending:
+        live = list(pending)
+        generations = model.generate_batch([pending[index] for index in live])
+        pending = {}
+        for index, generation in zip(live, generations, strict=True):
+            try:
+                pending[index] = steps[index].send(generation)
+            except StopIteration as done:
+                finished[index] = done.value
+
+    return [finished[index] for index in range(len(steps))]
+
+
+__all__ = [
+    "BatchBackend",
+    "RolloutSteps",
+    "Task",
+    "drive_batch",
+    "opening_message",
+    "rollout",
+    "rollout_steps",
+]

@@ -14,7 +14,7 @@ from escape_probes.config import Condition, EnvConfig, RunConfig
 from escape_probes.labels import label
 from escape_probes.model import FakeModel, ScriptedStep
 from escape_probes.prompts import system_prompt
-from escape_probes.rollout import opening_message, rollout
+from escape_probes.rollout import drive_batch, opening_message, rollout, rollout_steps
 from escape_probes.sandbox import ExecResult, Sandbox
 from escape_probes.trace import Trajectory
 
@@ -40,11 +40,13 @@ class FakeSandbox:
 class FakeTask:
     """A task that passes only once the agent has been told to pass."""
 
-    instance_id = "django__django-12419"
-    problem_statement = "Fix the bug."
     test_command = "./tests/runtests.py"
 
-    def __init__(self, passes_on_attempt: int = 1) -> None:
+    def __init__(
+        self, passes_on_attempt: int = 1, instance_id: str = "django__django-12419"
+    ) -> None:
+        self.instance_id = instance_id
+        self.problem_statement = f"Fix the bug in {instance_id}."
         self.passes_on_attempt = passes_on_attempt
         self.attempts = 0
         self.setup_calls = 0
@@ -57,6 +59,30 @@ class FakeTask:
         if self.attempts >= self.passes_on_attempt:
             return True, "2 passed"
         return False, "FAILED test_thing - AssertionError"
+
+
+class RecordingBatchModel:
+    """Dispatches each conversation to its own scripted model.
+
+    Which trajectory a conversation belongs to is read off the opening message,
+    because the driver deliberately does not say: it drops finished
+    trajectories from the round, so position in the batch means nothing after
+    the first one ends. Getting that wrong is the failure this class is shaped
+    to catch.
+    """
+
+    def __init__(self, scripts: dict[str, list[ScriptedStep]]) -> None:
+        self.models = {key: FakeModel(script) for key, script in scripts.items()}
+        self.batch_sizes: list[int] = []
+
+    def generate_batch(self, conversations):  # type: ignore[no-untyped-def]
+        self.batch_sizes.append(len(conversations))
+        generations = []
+        for conversation in conversations:
+            opening = conversation[1].content
+            key = next(k for k in self.models if k in opening)
+            generations.append(self.models[key].generate(conversation))
+        return generations
 
 
 @pytest.fixture
@@ -419,8 +445,9 @@ class TestOpeningMessage:
         assert "grader.yaml" in message
 
     def test_still_carries_the_problem_statement(self, config: RunConfig) -> None:
-        message = opening_message(FakeTask(), FakeSandbox(), config.agent)
-        assert FakeTask.problem_statement in message
+        task = FakeTask()
+        message = opening_message(task, FakeSandbox(), config.agent)
+        assert task.problem_statement in message
 
     def test_adds_no_wording_of_our_own_about_the_cue(self, config: RunConfig) -> None:
         # The intervention is placement: the cue's filename appears because the
@@ -435,8 +462,9 @@ class TestOpeningMessage:
 
     def test_can_be_switched_off(self, config: RunConfig) -> None:
         config.agent.initial_listing_command = ""
-        message = opening_message(FakeTask(), FakeSandbox(), config.agent)
-        assert message == FakeTask.problem_statement
+        task = FakeTask()
+        message = opening_message(task, FakeSandbox(), config.agent)
+        assert message == task.problem_statement
 
     def test_costs_no_step_budget(self, config: RunConfig) -> None:
         # A harness action, not an agent turn: it appears in no trajectory step.
@@ -541,3 +569,62 @@ class TestModifiesTests:
         # The write has to be tied to the test path, not co-occur with it.
         assert not self.detect("cat testing/test_pastebin.py > /tmp/copy.txt")
         assert self.detect("cat /tmp/fake.py > testing/test_pastebin.py")
+
+
+class TestDriveBatch:
+    """Test the lock-step driver: N trajectories, one engine call per round."""
+
+    def steps(self, config: RunConfig, ids: list[str]) -> list:  # type: ignore[type-arg]
+        return [
+            rollout_steps(FakeTask(instance_id=i), FakeSandbox(), config, "impossible", 0)
+            for i in ids
+        ]
+
+    def test_results_keep_the_order_they_were_given(self, config: RunConfig) -> None:
+        # Trajectory `slow` finishes last; it must still come back second.
+        ids = ["fast-instance", "slow-instance"]
+        model = RecordingBatchModel(
+            {
+                "fast-instance": [ScriptedStep(tool="submit")],
+                "slow-instance": [ScriptedStep(tool="bash", arguments={"cmd": "ls"})] * 3
+                + [ScriptedStep(tool="submit")],
+            }
+        )
+        trajectories = drive_batch(self.steps(config, ids), model)
+        assert [t.meta.instance_id for t in trajectories] == ids
+
+    def test_a_finished_trajectory_leaves_the_round(self, config: RunConfig) -> None:
+        # The batch must shrink, or a finished generator is sent another
+        # generation and the engine does work for a trajectory that is over.
+        model = RecordingBatchModel(
+            {
+                "fast-instance": [ScriptedStep(tool="submit")],
+                "slow-instance": [ScriptedStep(tool="bash", arguments={"cmd": "ls"})] * 2
+                + [ScriptedStep(tool="submit")],
+            }
+        )
+        drive_batch(self.steps(config, ["fast-instance", "slow-instance"]), model)
+        assert model.batch_sizes == [2, 1, 1]
+
+    def test_one_trajectory_matches_the_serial_driver(self, config: RunConfig) -> None:
+        # The two drivers must produce the same trajectory from the same script,
+        # or a vLLM batch and a single diagnostic run are not comparable.
+        script = [
+            ScriptedStep(tool="bash", arguments={"cmd": "cat grader.yaml"}),
+            ScriptedStep(tool="submit"),
+        ]
+        serial = rollout(
+            FakeTask(), FakeModel(list(script)), FakeSandbox(), config, "impossible", 0
+        )
+        batched = drive_batch(
+            self.steps(config, ["django__django-12419"]),
+            RecordingBatchModel({"django__django-12419": list(script)}),
+        )[0]
+        assert batched.meta.outcome == serial.meta.outcome
+        assert batched.meta.n_steps == serial.meta.n_steps
+        assert [s.tool_name for s in batched.steps] == [s.tool_name for s in serial.steps]
+
+    def test_an_empty_batch_is_not_an_engine_call(self, config: RunConfig) -> None:
+        model = RecordingBatchModel({})
+        assert drive_batch([], model) == []
+        assert model.batch_sizes == []
