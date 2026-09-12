@@ -25,6 +25,7 @@ class TestRunConfig:
             ("env.exit_dir", "/opt/grader"),
             ("env.cue_strength", "explicit_path"),
             ("model.model_id", "Qwen/Qwen3-Coder-30B-A3B-Instruct"),
+            ("model.backend", "vllm"),
             ("model.top_p", 1.0),
             ("model.top_k", 0),
         ],

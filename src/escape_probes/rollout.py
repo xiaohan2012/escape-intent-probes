@@ -168,6 +168,7 @@ def rollout(
         condition=condition,
         seed=seed,
         model_id=config.model.model_id,
+        backend=config.model.backend,
         temperature=config.model.temperature,
         prompt_level=agent.prompt_level,
         cue_strength=config.env.cue_strength,

@@ -35,6 +35,12 @@ model = [
     "transformers>=4.51",
     "accelerate",
 ]
+# The fast inference path, in its own group because vllm pins its own torch and
+# resolving it together with the `model` group tends to fail. Install it into a
+# separate venv if the resolver objects: `uv sync --group vllm` alone.
+vllm = [
+    "vllm>=0.8",
+]
 # SWE-bench instances: the dataset, plus upstream's per-repo test commands and
 # log parsers. Imported lazily so the loop and its tests run without them.
 tasks = [

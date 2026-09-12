@@ -20,6 +20,9 @@ Condition = Literal["benign", "impossible", "monitored"]
 PromptLevel = Literal["A", "B", "C", "D"]
 """ImpossibleBench's prompt-strictness ladder (Table 1). Default A, per D20."""
 
+Backend = Literal["vllm", "hf"]
+"""How the model is served. `vllm` for rollouts, `hf` for Pass 2 (D21)."""
+
 CueStrength = Literal["explicit_path", "cache_dir", "host_only"]
 """Three cue strengths (design doc 6.1), weakest last. Default `explicit_path`."""
 
@@ -193,6 +196,10 @@ class AgentConfig(BaseModel):
 
 class ModelConfig(BaseModel):
     model_id: str = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+    backend: Backend = "vllm"
+    """Recorded in every trajectory's meta: a run that does not say how the
+    model was served is not reproducible."""
+
     revision: str | None = None
     dtype: str = "bfloat16"
     temperature: float = 1.0
@@ -210,6 +217,32 @@ class ModelConfig(BaseModel):
     depends on (design doc 6.3). `top_k=0` disables the cutoff."""
 
     max_new_tokens: int = 1024
+
+    tensor_parallel_size: int = 1
+    """How many GPUs one engine shards across (vLLM only).
+
+    A 30B MoE in bf16 is ~60 GB, which fits one 80 GB card but not one 48 GB
+    A6000 — on a 4xA6000 box this must be at least 2. Two TP=2 engines are
+    preferable to one TP=4: the all-reduce runs over PCIe (no NVLink), and the
+    checkpoint has few enough KV heads that TP=4 leaves one per rank."""
+
+    gpu_memory_utilization: float = 0.90
+    """Fraction of each card vLLM may claim for weights plus KV cache."""
+
+    max_model_len: int | None = None
+    """Context length to size the KV cache for. `None` takes the checkpoint's
+    own, which is large enough to make vLLM refuse to start when the cache does
+    not fit; a trajectory's context is a few thousand tokens, so capping this
+    buys back memory for the batch dimension."""
+
+    device_map: str = "auto"
+    """Where `transformers` puts the layers (HuggingFace backend only).
+
+    `auto` splits layers across whatever cards are present — naive pipeline
+    parallel, one layer entirely on one device. That is the shape Pass 2 wants:
+    the residual stream stays full-width and unsharded, so a forward hook sees
+    exactly what it would see on a single card."""
+
     fake: bool = False
     """Use the scripted fake model — lets the whole loop run with no GPU (Step 0.3)."""
 

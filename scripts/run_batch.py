@@ -64,9 +64,9 @@ def build_model(config: RunConfig, fake: bool) -> ModelBackend:
         from escape_probes.model import FakeModel, ScriptedStep  # noqa: PLC0415
 
         return FakeModel([ScriptedStep(tool="submit")])
-    from escape_probes.hf_backend import HFModel  # noqa: PLC0415
+    from escape_probes.backends import build_model as build  # noqa: PLC0415
 
-    return HFModel(config.model, tools=config.agent.tools)
+    return build(config.model, tools=config.agent.tools)
 
 
 def main() -> int:
@@ -80,6 +80,7 @@ def main() -> int:
     parser.add_argument("--report-every", type=int, default=5)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--host", default=None, help="SSH destination of the Docker host")
+    parser.add_argument("--backend", default=None, choices=["vllm", "hf"])
     parser.add_argument("--fake", action="store_true")
     args = parser.parse_args()
 
@@ -88,6 +89,8 @@ def main() -> int:
     config = RunConfig(run_id=args.run_id, instance_ids=tuple(args.instances))
     if args.max_steps:
         config.agent.max_steps = args.max_steps
+    if args.backend:
+        config.model.backend = args.backend
 
     rows = load_instances(args.split)
     missing = [i for i in args.instances if i not in rows]

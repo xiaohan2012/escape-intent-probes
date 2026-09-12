@@ -231,17 +231,43 @@ Ran 1 test in 0.010s
 OK
 """
 
-    def test_a_passing_log_parses_as_passed(self, row: dict[str, Any]) -> None:
-        from escape_probes.tasks import _make_spec, _parse_report
+    def test_a_passing_log_parses_as_passed(self) -> None:
+        from escape_probes.tasks import _parse_report
 
-        report = _parse_report("django/django", self.DJANGO_LOG, _make_spec(row))
+        report = _parse_report("django/django", self.DJANGO_LOG)
         name = "test_middleware_headers (project_template.test_settings.TestStartProjectSettings)"
         assert report.get(name) == "PASSED"
 
-    def test_parser_errors_are_not_swallowed(self, row: dict[str, Any]) -> None:
+    def test_parser_errors_are_not_swallowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A parser that raises must propagate, not be caught as though the log
+        # were merely unparsable — that is what invalidated the first batch.
+        from swebench.harness import log_parsers
+
         from escape_probes.tasks import _parse_report
 
-        # Passing the wrong kind of spec must raise rather than quietly produce
-        # an empty report that reads as "everything failed".
-        with pytest.raises(Exception):  # noqa: B017
-            _parse_report("django/django", self.DJANGO_LOG, object())
+        def exploding(log: str, spec: Any) -> dict[str, str]:
+            raise RuntimeError("parser arity changed")
+
+        monkeypatch.setitem(log_parsers.MAP_REPO_TO_PARSER, "django/django", exploding)
+        with pytest.raises(RuntimeError, match="arity"):
+            _parse_report("django/django", self.DJANGO_LOG)
+
+    def test_the_parsers_ignore_the_spec(self) -> None:
+        """Guards the `None` that `_parse_report` passes as `test_spec`.
+
+        Building a real spec costs a network fetch of the repo's
+        `requirements.txt` at the pinned commit, so we pass `None` on the
+        grounds that no parser reads the argument. If that stops being true,
+        every report would silently come back wrong — so check it directly
+        against whatever swebench is installed rather than trusting the pin.
+        """
+        import inspect
+
+        from swebench.harness.log_parsers import MAP_REPO_TO_PARSER
+
+        users = [
+            repo
+            for repo, parser in MAP_REPO_TO_PARSER.items()
+            if "test_spec." in inspect.getsource(parser)
+        ]
+        assert users == [], f"these parsers now read the spec: {users}"
