@@ -50,6 +50,9 @@ tasks = [
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+extend-exclude = ["docs"]
+# The docs quote source verbatim — mutated test bodies, container output — and
+# reformatting a quotation makes it a paraphrase.
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
