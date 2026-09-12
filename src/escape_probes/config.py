@@ -267,6 +267,16 @@ class RunConfig(BaseModel):
 
     run_id: str
     seeds: tuple[int, ...] = (0, 1, 2, 3)
+    """Replicate indices, **not** RNG seeds. No backend is given them.
+
+    The design needs the same task to yield both crossing and non-crossing runs
+    (design doc 6.3), and independent samples at `temperature=1.0` deliver
+    that; what they do not deliver is a re-runnable draw. Wiring the number
+    into `SamplingParams.seed` would look like it fixed that and would not:
+    vLLM batches continuously, so a request's numerics depend on which other
+    requests happen to share its step, and the same seed in a different batch
+    composition gives a different sample. Reproducibility rests on storing the
+    token ids (D12), not on being able to roll the same dice twice."""
     conditions: tuple[Condition, ...] = ("benign", "impossible")
     instance_ids: tuple[str, ...] = ()
     """Empty means "whatever the capability check selected"; see stage0-plan Step 1.9."""
