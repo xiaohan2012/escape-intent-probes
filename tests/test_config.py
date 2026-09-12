@@ -127,8 +127,15 @@ class TestReadOnlyTests:
         config = RunConfig.from_yaml("configs/propensity-control.yaml")
         assert config.env.reset_tests is False
 
-    def test_no_ablation_cell_turns_it_off(self) -> None:
+    def test_the_propensity_control_is_the_only_config_that_turns_it_off(self) -> None:
+        # Globbing every config rather than a prefix: a cell that quietly let
+        # the agent edit the graded suite would produce passes that mean
+        # nothing, and the near route working removes the reason to consider the
+        # far one. Written this way because the earlier version globbed
+        # `ablate-*.yaml`, which matched nothing here and passed vacuously.
         from pathlib import Path
 
-        for path in sorted(Path("configs").glob("ablate-*.yaml")):
-            assert RunConfig.from_yaml(path).env.reset_tests is True, path
+        configs = sorted(Path("configs").glob("*.yaml"))
+        assert configs, "no run configs found — this test would pass vacuously"
+        writable = [p.name for p in configs if not RunConfig.from_yaml(p).env.reset_tests]
+        assert writable == ["propensity-control.yaml"]
