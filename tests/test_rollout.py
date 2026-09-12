@@ -15,7 +15,7 @@ from escape_probes.labels import label
 from escape_probes.model import FakeModel, ScriptedStep
 from escape_probes.prompts import system_prompt
 from escape_probes.rollout import drive_batch, opening_message, rollout, rollout_steps
-from escape_probes.sandbox import ExecResult, Sandbox
+from escape_probes.sandbox import ExecResult, Sandbox, SandboxError
 from escape_probes.trace import Trajectory
 
 
@@ -591,7 +591,7 @@ class TestDriveBatch:
             }
         )
         trajectories = drive_batch(self.steps(config, ids), model)
-        assert [t.meta.instance_id for t in trajectories] == ids
+        assert [t.meta.instance_id for t in trajectories if t] == ids
 
     def test_a_finished_trajectory_leaves_the_round(self, config: RunConfig) -> None:
         # The batch must shrink, or a finished generator is sent another
@@ -620,6 +620,7 @@ class TestDriveBatch:
             self.steps(config, ["django__django-12419"]),
             RecordingBatchModel({"django__django-12419": list(script)}),
         )[0]
+        assert batched is not None
         assert batched.meta.outcome == serial.meta.outcome
         assert batched.meta.n_steps == serial.meta.n_steps
         assert [s.tool_name for s in batched.steps] == [s.tool_name for s in serial.steps]
@@ -628,3 +629,34 @@ class TestDriveBatch:
         model = RecordingBatchModel({})
         assert drive_batch([], model) == []
         assert model.batch_sizes == []
+
+    def test_one_dead_trajectory_does_not_end_the_round(self, config: RunConfig) -> None:
+        # A container that dies mid-round must cost one trajectory, not all of
+        # them — the serial driver could let the exception escape because it
+        # only ever had one.
+        class DyingSandbox(FakeSandbox):
+            def exec(self, command: str, timeout: int = 120, workdir: str | None = None):  # type: ignore[no-untyped-def]
+                if "boom" in command:
+                    raise SandboxError("container is gone")
+                return super().exec(command, timeout, workdir)
+
+        steps = [
+            rollout_steps(FakeTask(instance_id="dying"), DyingSandbox(), config, "impossible", 0),
+            rollout_steps(FakeTask(instance_id="healthy"), FakeSandbox(), config, "impossible", 0),
+        ]
+        model = RecordingBatchModel(
+            {
+                "dying": [ScriptedStep(tool="bash", arguments={"cmd": "boom"})],
+                "healthy": [
+                    ScriptedStep(tool="bash", arguments={"cmd": "ls"}),
+                    ScriptedStep(tool="submit"),
+                ],
+            }
+        )
+        errors: list[tuple[int, str]] = []
+        trajectories = drive_batch(steps, model, on_error=lambda i, e: errors.append((i, str(e))))
+
+        assert trajectories[0] is None
+        assert errors == [(0, "container is gone")]
+        assert trajectories[1] is not None
+        assert trajectories[1].meta.outcome == "passed"

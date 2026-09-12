@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from collections.abc import Generator, Sequence
+from collections.abc import Callable, Generator, Sequence
 from typing import Protocol
 
 from escape_probes.config import EDIT, SUBMIT, AgentConfig, Condition, RunConfig
@@ -232,7 +232,27 @@ class BatchBackend(Protocol):
     def generate_batch(self, conversations: Sequence[Sequence[Message]]) -> list[Generation]: ...
 
 
-def drive_batch(steps: Sequence[RolloutSteps], model: BatchBackend) -> list[Trajectory]:
+class SerialBatch:
+    """Adapts a one-at-a-time backend to the batch interface.
+
+    So that there is one driver rather than two code paths. The fake model and
+    the HuggingFace backend generate one conversation at a time; wrapping them
+    means `drive_batch` is what every batch goes through, and a bug in the
+    driver cannot hide behind a serial fallback that the tests exercise instead.
+    """
+
+    def __init__(self, model: ModelBackend) -> None:
+        self.model = model
+
+    def generate_batch(self, conversations: Sequence[Sequence[Message]]) -> list[Generation]:
+        return [self.model.generate(conversation) for conversation in conversations]
+
+
+def drive_batch(
+    steps: Sequence[RolloutSteps],
+    model: BatchBackend,
+    on_error: Callable[[int, Exception], None] | None = None,
+) -> list[Trajectory | None]:
     """Advance N trajectories in lock step, one engine call per round.
 
     Each round collects the current conversation from every live trajectory and
@@ -240,6 +260,12 @@ def drive_batch(steps: Sequence[RolloutSteps], model: BatchBackend) -> list[Traj
     batching and there is no padding or ragged-length bookkeeping here.
     Trajectories leave the round as they finish, and the returned list is in the
     order given regardless of the order they finished in.
+
+    A trajectory that raises — a container that died, a sandbox command that
+    timed out — is closed and comes back as `None`, and the round carries on.
+    The serial driver could afford to let an exception escape because it cost
+    one trajectory; here it would cost the whole round, which is the opposite of
+    why batching exists. `on_error` is how the caller reports it.
 
     The known cost is the barrier: a round waits for its slowest generation, and
     the sandbox commands of a round run while the GPU has nothing to do. Both
@@ -250,27 +276,38 @@ def drive_batch(steps: Sequence[RolloutSteps], model: BatchBackend) -> list[Traj
     finished: dict[int, Trajectory] = {}
     pending: dict[int, list[Message]] = {}
 
-    for index, generator in enumerate(steps):
+    def advance(index: int, pump: Callable[[], list[Message]]) -> None:
+        """One step of one trajectory, or its end. Never raises.
+
+        `pump` is `next` on the first round and `send` afterwards; the caller
+        supplies it so that the priming round and the steady state share this
+        error handling rather than each having its own copy of it.
+        """
         try:
-            pending[index] = next(generator)
+            pending[index] = pump()
         except StopIteration as done:
             finished[index] = done.value
+        except Exception as error:
+            steps[index].close()
+            if on_error is not None:
+                on_error(index, error)
+
+    for index, generator in enumerate(steps):
+        advance(index, lambda g=generator: next(g))
 
     while pending:
         live = list(pending)
         generations = model.generate_batch([pending[index] for index in live])
         pending = {}
         for index, generation in zip(live, generations, strict=True):
-            try:
-                pending[index] = steps[index].send(generation)
-            except StopIteration as done:
-                finished[index] = done.value
+            advance(index, lambda i=index, g=generation: steps[i].send(g))
 
-    return [finished[index] for index in range(len(steps))]
+    return [finished.get(index) for index in range(len(steps))]
 
 
 __all__ = [
     "BatchBackend",
+    "SerialBatch",
     "RolloutSteps",
     "Task",
     "drive_batch",
