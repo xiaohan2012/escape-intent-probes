@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -272,6 +272,36 @@ def command_char_offset(text: str) -> int | None:
     return None if call is None else call.value_offset
 
 
-def _command_token_index(text: str, tokenizer: CharTokenizer) -> int | None:
+def command_token_index(
+    gen_ids: Sequence[int],
+    text: str,
+    decode: Callable[[Sequence[int]], str],
+) -> int | None:
+    """Probe position (b): the first token of the tool call's command string.
+
+    One implementation, called by every backend. There used to be two — this
+    module's, for the fake backend's character tokenizer, and a copy inside
+    `HFModel` — and only this one was tested. The copy compared decoded prefix
+    length with `>=` and so returned the token *before* the command, in range
+    and without raising, which would have put every probe read one token early.
+
+    The comparison is strict because token `k` begins at character
+    `len(decode(ids[:k]))`, so the token containing `offset` is the first `k`
+    whose *following* prefix passes it.
+
+    Decoding prefixes is not free, but it is the only mapping that survives a
+    tokenizer merging `"` with the word after it — the alignment failure the
+    fake backend's character tokenizer was changed to avoid, and the one E4
+    checks for on real data.
+    """
     offset = command_char_offset(text)
-    return None if offset is None else len(tokenizer.encode(text[:offset]))
+    if offset is None:
+        return None
+    for index in range(1, len(gen_ids) + 1):
+        if len(decode(gen_ids[:index])) > offset:
+            return index - 1
+    return None
+
+
+def _command_token_index(text: str, tokenizer: CharTokenizer) -> int | None:
+    return command_token_index(tokenizer.encode(text), text, tokenizer.decode)

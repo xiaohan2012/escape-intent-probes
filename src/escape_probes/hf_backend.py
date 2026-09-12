@@ -26,7 +26,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from escape_probes.config import BASH, EDIT, SUBMIT, ModelConfig
-from escape_probes.model import Generation, Message, command_char_offset
+from escape_probes.model import Generation, Message, command_token_index
 
 ALL_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
@@ -152,24 +152,8 @@ class HFModel:
             prompt_token_ids=tuple(prompt_ids),
             gen_token_ids=tuple(gen_ids),
             text=text,
-            tool_start_token_idx=self._command_token_index(gen_ids, text),
+            tool_start_token_idx=command_token_index(gen_ids, text, self._decode),
         )
 
-    def _command_token_index(self, gen_ids: Sequence[int], text: str) -> int | None:
-        """Probe position (b): the first token of the tool call's command string.
-
-        The character offset comes from the shared format helper; mapping it to
-        a token index means finding the first token whose decoded prefix reaches
-        that offset. Decoding prefixes is not free, but it is the only mapping
-        that survives a tokenizer merging `"` with the word after it — the
-        alignment failure the fake backend's character tokenizer was changed to
-        avoid, and the one E4 checks for on real data.
-        """
-        offset = command_char_offset(text)
-        if offset is None:
-            return None
-        for index in range(1, len(gen_ids) + 1):
-            prefix = self.tokenizer.decode(gen_ids[:index], skip_special_tokens=True)
-            if len(prefix) >= offset:
-                return index - 1
-        return None
+    def _decode(self, ids: Sequence[int]) -> str:
+        return self.tokenizer.decode(ids, skip_special_tokens=True)
