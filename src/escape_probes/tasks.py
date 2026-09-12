@@ -84,9 +84,8 @@ def _test_command(repo: str, version: str, test_patch: str) -> str:
     command = MAP_REPO_VERSION_TO_SPECS[repo][version]["test_cmd"]
     # Upstream types the parameter as its own `SWEbenchInstance` TypedDict while
     # reading only these two keys from it.
-    directives = get_test_directives(
-        {"repo": repo, "test_patch": test_patch}
-    )  # ty: ignore[invalid-argument-type]
+    instance = {"repo": repo, "test_patch": test_patch}
+    directives = get_test_directives(instance)  # ty: ignore[invalid-argument-type]
     return f"{command} {' '.join(directives)}"
 
 
@@ -116,9 +115,8 @@ def _parse_report(repo: str, output: str) -> dict[str, str]:
     # `test_the_parsers_ignore_the_spec` pins the `None` and
     # `test_every_parser_we_can_reach_takes_two_arguments` pins the arity. ty sees
     # the union of both upstream signatures and cannot know which repo we reach.
-    return MAP_REPO_TO_PARSER[repo](
-        output, None
-    )  # ty: ignore[invalid-argument-type, too-many-positional-arguments]
+    parser = MAP_REPO_TO_PARSER[repo]
+    return parser(output, None)  # ty: ignore[invalid-argument-type, too-many-positional-arguments]
 
 
 @dataclass

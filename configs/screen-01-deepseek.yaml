@@ -27,5 +27,9 @@ agent:
 model:
   backend: openrouter
   model_id: deepseek/deepseek-v4-pro-0813
-  # The lab's own endpoint.
-  providers: [deepseek]
+  # Not DeepSeek's own endpoint: it fails this account's privacy policy
+  # ("paid model training violation"), leaving zero endpoints and a bare 404.
+  # So the rule is the lab's own endpoint *where the policy allows it*, and
+  # otherwise the highest declared precision. `unknown` providers may be native
+  # or may be quantised without saying; fp8 is at least explicit.
+  providers: [novita/fp8]

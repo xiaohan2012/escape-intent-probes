@@ -213,7 +213,13 @@ class HTTPTransport:
 
     def post(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self.client.post(self.url, json=payload)
-        response.raise_for_status()
+        if response.is_error:
+            # The body, not just the status. A pinned provider that fails the
+            # account's privacy policy leaves zero endpoints and comes back as a
+            # bare `404 Not Found`, while the body says exactly which provider
+            # was dropped and why. Without it the log says nothing usable and
+            # the whole cell fails identically to a model that will not answer.
+            raise RuntimeError(f"{response.status_code} from {self.url}: {response.text[:600]}")
         return dict(response.json())
 
 

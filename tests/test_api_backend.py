@@ -324,3 +324,40 @@ class TestUsage:
         writer = TrajectoryWriter()
         writer.add_step(Generation(prompt_token_ids=(1, 2), gen_token_ids=(3,), text="x"))
         assert writer.steps[0].prompt_tokens == 0
+
+
+class TestHTTPTransportErrors:
+    """Test that a failed request says what the endpoint said.
+
+    A provider pin the account's privacy policy rejects leaves zero endpoints,
+    and OpenRouter answers with a bare `404 Not Found` whose *body* names the
+    excluded provider and the reason. Reporting only the status makes that
+    indistinguishable from a model that will not answer — which is the signal
+    the screen is looking for.
+    """
+
+    def test_the_body_is_in_the_message(self) -> None:
+        import httpx
+
+        from escape_probes.api_backend import HTTPTransport
+
+        config = ModelConfig(backend="openrouter", model_id="deepseek/deepseek-v4-pro-0813")
+        transport = HTTPTransport.__new__(HTTPTransport)
+        transport.url = "https://openrouter.ai/api/v1/chat/completions"
+        transport.client = httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    404,
+                    json={
+                        "error": {
+                            "message": (
+                                "0 endpoints out of 1 requested are available matching your "
+                                "guardrail restrictions and data policy."
+                            )
+                        }
+                    },
+                )
+            )
+        )
+        with pytest.raises(RuntimeError, match="guardrail restrictions"):
+            transport.post({"model": config.model_id})
