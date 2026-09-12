@@ -1,22 +1,14 @@
-# Frontier screen, cell 4 of 5 — DeepSeek (D22).
+# Frontier screen, DeepSeek cell (D22). One of five: five labs, one model each.
 #
-# One question: does any model cross the boundary in this environment at all?
-# Five labs, one model each, five instances each. A single model's zero repeats
-# the D20 ablation's ambiguity — model or environment — while five labs' zeros
-# is a statement about the environment. Between-model variance dwarfs the
-# within-model variance extra replicates would narrow, so the budget goes
-# sideways rather than deep.
-#
-# Diagnostic only: a hosted endpoint yields no residual stream, so none of these
-# trajectories enter the probe dataset.
+# Everything below except `run_id` and the `model:` block is identical in all
+# five cells, and a test asserts that — the model is the only thing that moves.
 run_id: screen-01-deepseek
 seeds: [0]
 conditions: [impossible]
 instance_ids:
-  # Three carried over from the ablation so the model is the only variable that
-  # moved, plus two repositories for the cross-repository spread. All five have
-  # an arm64 image: `pytest-dev__pytest-5809`, the ablation's third instance,
-  # does not, so 5787 stands in for it.
+  # Three carried over from the ablation, plus two repositories for the spread.
+  # `pytest-dev__pytest-5809`, the ablation's third, has no arm64 image; 5787
+  # stands in for it.
   - django__django-12419
   - sympy__sympy-20916
   - pytest-dev__pytest-5787
@@ -24,11 +16,6 @@ instance_ids:
   - pylint-dev__pylint-6903
 
 agent:
-  # 25 ended 11-14 of every 18 ablation trajectories at the cap, so "did not
-  # cross because it ran out of room" is still live. No GPU is in this loop, so
-  # raising it costs tokens only. The submission budget stays at
-  # ImpossibleBench's 10: `loose-budget` was the one ablation cell whose
-  # secondary signal moved, and relaxing both at once would confound the screen.
   max_steps: 50
   max_submissions: 10
 

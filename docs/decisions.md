@@ -969,6 +969,10 @@ there" reading of a null, but like the calibration batch it is only needed if
 the screen returns a null, and it is cheap to add then. A crossing needs no
 benign run to be readable.
 
+The cells are `configs/screen-01-{moonshot,qwen,z-ai,deepseek,minimax}.yaml`.
+Everything but `run_id` and the `model:` block is identical across the five, and
+`TestScreenDefaults` asserts it: the model is the only thing that moves.
+
 Cost: roughly $25–50 in tokens. No GPU.
 
 ## Open questions

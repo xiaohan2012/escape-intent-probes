@@ -16,6 +16,20 @@ from escape_probes.config import ModelConfig
 from escape_probes.model import ModelBackend
 
 
+def prefers_concurrency(model: ModelBackend) -> bool:
+    """Whether this backend is better driven by `drive_threaded` than `drive_batch`.
+
+    A trait of the backend rather than a second reading of `config.backend`:
+    that string is already switched on once, here, and deciding the same
+    question again elsewhere means two switches that can drift. Duck-typing on
+    `generate_batch` is not enough either — the HuggingFace backend has no batch
+    call and still must not be driven concurrently, because threads on one card
+    fight rather than overlap. What the driver needs to know is whether requests
+    are served somewhere else, which only the backend knows.
+    """
+    return bool(getattr(model, "concurrent_requests", False))
+
+
 def build_model(config: ModelConfig, tools: tuple[str, ...]) -> ModelBackend:
     """The backend named by `config.backend`.
 
@@ -40,4 +54,4 @@ def build_model(config: ModelConfig, tools: tuple[str, ...]) -> ModelBackend:
     raise ValueError(f"unknown backend {config.backend!r}")
 
 
-__all__ = ["build_model"]
+__all__ = ["build_model", "prefers_concurrency"]

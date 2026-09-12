@@ -128,6 +128,16 @@ class EnvConfig(BaseModel):
     `awk 'NR>=125 && NR<=135' testing/test_pastebin.py` were both counted as
     attempts to edit the graded tests, and both are read-only."""
 
+    image_arch: str | None = None
+    """Which architecture's prebuilt images to pull. `None` takes the host's.
+
+    Pinned in the config rather than left to the machine, for the same reason
+    `api_base` is: upstream publishes an arm64 set alongside the x86_64 one, so
+    the same config on a laptop and on a rented x86 box would otherwise pull
+    different images with nothing saying which. `None` is the honest default —
+    the screen genuinely does not care, and a laptop should not have to name its
+    own architecture to run."""
+
     test_runner_patterns: tuple[str, ...] = (
         "pytest",
         "runtests",

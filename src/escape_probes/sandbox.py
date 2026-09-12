@@ -152,7 +152,7 @@ class DockerSandbox:
         self.network = network
         self.host = host
         """SSH destination of the Docker host. `None` runs Docker locally."""
-        self.image = image_for(instance_id)
+        self.image = image_for(instance_id, arch=env.image_arch)
         self._container_id: str | None = None
 
     def _docker(self, args: list[str]) -> list[str]:

@@ -48,6 +48,29 @@ class TestImageFor:
             image_for("sympy__sympy-20916", arch="riscv64")
 
 
+class TestSandboxImageArch:
+    """Test that a run can pin the architecture its images come from.
+
+    Left to the host, the same config on a laptop and on a rented x86 box pulls
+    different images with nothing in the run saying which.
+    """
+
+    def test_the_config_pins_it(self) -> None:
+        env = EnvConfig(image_arch="x86_64")
+        box = DockerSandbox("django__django-12419", env, host=None)
+        assert box.image == image_for("django__django-12419", arch="x86_64")
+
+    def test_unset_takes_the_host(self) -> None:
+        box = DockerSandbox("django__django-12419", EnvConfig(), host=None)
+        assert box.image == image_for("django__django-12419", arch=host_arch())
+
+    def test_the_architecture_is_recorded_in_the_image_name(self) -> None:
+        # No separate meta field is needed: `TrajectoryMeta.image` already
+        # carries the full image name, and the name now names the architecture.
+        box = DockerSandbox("django__django-12419", EnvConfig(image_arch="arm64"), host=None)
+        assert "arm64" in box.image
+
+
 class TestHostArch:
     """Test the mapping from `platform.machine()` onto upstream's arch names.
 

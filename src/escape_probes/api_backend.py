@@ -143,6 +143,13 @@ class APIModel:
     `drive_threaded` relies on.
     """
 
+    concurrent_requests = True
+    """Drive this backend concurrently, not in lock step (`prefers_concurrency`).
+
+    There is no batch dimension to fill — the requests are served on someone
+    else's hardware — so a barrier would make every trajectory wait for the
+    round's slowest response and buy nothing back."""
+
     def __init__(
         self,
         config: ModelConfig,

@@ -29,6 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from escape_probes.backends import prefers_concurrency  # noqa: E402
 from escape_probes.boundary import plant  # noqa: E402
 from escape_probes.config import RunConfig  # noqa: E402
 from escape_probes.labels import Labels, label  # noqa: E402
@@ -119,16 +120,17 @@ def main() -> int:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     if args.config is not None:
+        # The config wins, and says so by overwriting the flags rather than
+        # sitting beside them in a second set of names.
         config = RunConfig.from_yaml(args.config)
-        instances = list(config.instance_ids)
-        conditions = list(config.conditions)
-        seeds = list(config.seeds)
-    else:
-        if not args.instances:
-            print("pass --config or --instances", file=sys.stderr)
-            return 1
+        args.instances = list(config.instance_ids)
+        args.conditions = list(config.conditions)
+        args.seeds = list(config.seeds)
+    elif args.instances:
         config = RunConfig(run_id=args.run_id, instance_ids=tuple(args.instances))
-        instances, conditions, seeds = args.instances, args.conditions, args.seeds
+    else:
+        print("pass --config or --instances", file=sys.stderr)
+        return 1
     if args.max_steps:
         config.agent.max_steps = args.max_steps
     if args.backend:
@@ -139,7 +141,7 @@ def main() -> int:
         config.model.max_model_len = args.max_model_len
 
     rows = load_instances(args.split)
-    missing = [i for i in instances if i not in rows]
+    missing = [i for i in args.instances if i not in rows]
     if missing:
         print(f"not in the {args.split} split: {missing}", file=sys.stderr)
         return 1
@@ -148,9 +150,9 @@ def main() -> int:
     # and condition rather than finishing one instance exhaustively.
     work = [
         (instance, condition, seed)
-        for seed in seeds
-        for instance in instances
-        for condition in conditions
+        for seed in args.seeds
+        for instance in args.instances
+        for condition in args.conditions
     ]
     todo = [w for w in work if not (config.trajectory_dir(*w) / "meta.json").exists()]
     done = len(work) - len(todo)
@@ -232,13 +234,11 @@ def main() -> int:
                 instance, condition, seed = opened[index][0]
                 print(f"  {instance} {condition} {seed}: FAILED {error}", flush=True)
 
-            # Which driver, decided by how the model is served rather than by
-            # whether it happens to expose `generate_batch`. A hosted endpoint
-            # has no batch dimension to fill, so lock step would make every
-            # trajectory wait for the round's slowest response and buy nothing;
-            # a local engine is the opposite case, where concurrency without a
-            # batch is threads fighting over one card (D22).
-            if config.model.backend == "openrouter":
+            # Which driver, asked of the backend rather than re-derived from
+            # the config: `config.backend` is switched on once already, where
+            # the model is built, and answering the same question twice is two
+            # switches that can drift.
+            if prefers_concurrency(model):
                 trajectories = drive_threaded(
                     steps, model, max_workers=len(steps), on_error=report_error
                 )

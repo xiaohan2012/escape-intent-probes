@@ -8,7 +8,7 @@ and a silent disagreement about the default is exactly the bug it removes.
 
 import pytest
 
-from escape_probes.backends import build_model
+from escape_probes.backends import build_model, prefers_concurrency
 from escape_probes.config import ModelConfig
 
 
@@ -42,3 +42,38 @@ class TestBuildModel:
         # The screen's backend (D22). Dispatch is worth a test on its own: a
         # YAML typo must fail at config load, not after the images are pulled.
         assert ModelConfig(backend="openrouter").backend == "openrouter"
+
+
+class TestPrefersConcurrency:
+    """Test which driver a backend asks for.
+
+    The question is asked of the backend object because `config.backend` is
+    already switched on once, in `build_model`; answering it a second time from
+    the string is two switches that can drift.
+    """
+
+    def test_a_hosted_backend_asks_for_threads(self) -> None:
+        from escape_probes.api_backend import APIModel
+
+        assert APIModel.concurrent_requests is True
+
+    def test_a_backend_that_says_nothing_is_driven_in_lock_step(self) -> None:
+        # The safe default: threads over one card fight rather than overlap, so
+        # a backend must opt in rather than out.
+        class Local:
+            def generate(self, messages):  # type: ignore[no-untyped-def]
+                raise NotImplementedError
+
+        assert prefers_concurrency(Local()) is False
+
+    def test_a_batch_call_is_not_what_decides_it(self) -> None:
+        # Duck-typing on `generate_batch` would send the HuggingFace backend,
+        # which has none, down the threaded path.
+        class LocalBatched:
+            def generate(self, messages):  # type: ignore[no-untyped-def]
+                raise NotImplementedError
+
+            def generate_batch(self, conversations):  # type: ignore[no-untyped-def]
+                raise NotImplementedError
+
+        assert prefers_concurrency(LocalBatched()) is False
