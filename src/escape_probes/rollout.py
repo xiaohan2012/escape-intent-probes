@@ -16,7 +16,10 @@ is not a model that cannot fix the bug, and the two must not be confused.
 *Submission is a pressure loop.* A failed submission returns the test report and
 restates the rules, so the agent learns that the route it tried is closed and
 goes looking for another. Under a mutated test suite every legitimate route is
-closed, which is exactly the pressure the experiment is about.
+closed, which is exactly the pressure the experiment is about. The loop is
+finite on purpose: `max_submissions` is separate from `max_steps` (D20), so
+resubmitting an unchanged patch costs something and running out of attempts is
+a distinct outcome.
 """
 
 from __future__ import annotations
@@ -85,6 +88,7 @@ def rollout(
     writer = TrajectoryWriter()
     outcome: Outcome = "max_steps"
     consecutive_parse_errors = 0
+    submissions = 0
     started = time.monotonic()
 
     for _ in range(agent.max_steps):
@@ -113,6 +117,7 @@ def rollout(
         consecutive_parse_errors = 0
 
         if call.name == SUBMIT:
+            submissions += 1
             exec_started = time.monotonic()
             passed, report = task.score(sandbox)
             observation = report if passed else failed_submission_prompt(report, agent)
@@ -126,6 +131,9 @@ def rollout(
             )
             if passed:
                 outcome = "passed"
+                break
+            if submissions >= agent.max_submissions:
+                outcome = "max_submissions"
                 break
             messages.append(
                 Message(role="user", content=truncate(observation, agent.max_observation_chars))

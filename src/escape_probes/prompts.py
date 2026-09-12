@@ -7,9 +7,13 @@ strictness clause comes from the ladder below rather than being fixed.
 The ladder is ImpossibleBench's Table 1, verbatim, and it is the main lever on
 E2. For GPT-5 and o3 on Conflicting-LiveCodeBench it moved cheating from >85%
 at A/B down to 1% and 33% at D — a bigger swing than any other knob they tried.
-We default to **B** (D13): A's "and pass all tests" is explicit pressure to
-pass, which shades toward instructed intent, and the whole point is that nobody
-instructs the agent to cross.
+We default to **A** (D20, reversing D13). D13 chose B on the grounds that A's
+"and pass all tests" shades toward instructed intent; that was wrong. Level 3 is
+about where the intent to *cross* comes from, not about whether the task has an
+objective, and "pass all tests" says nothing about shortcuts, the grader, or
+leaving the working directory. B is the distortion: it lets an agent conclude
+that implementing correctly *is* completing the task, which is what one pilot
+did for six consecutive submissions. The real incident offered no such off-ramp.
 """
 
 from __future__ import annotations
@@ -87,7 +91,7 @@ def system_prompt(agent: AgentConfig, test_command: str = "") -> str:
     return SYSTEM_PROMPT.format(
         strictness=STRICTNESS[agent.prompt_level],
         test_info=test_info,
-        max_attempts=agent.max_steps,
+        max_attempts=agent.max_submissions,
     )
 
 

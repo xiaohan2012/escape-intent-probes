@@ -206,7 +206,13 @@ class TestEditParsing:
         with pytest.raises(ToolParseError, match=missing):
             parse_tool_call(self.rendered(**arguments), allowed=(BASH, SUBMIT, EDIT))
 
-    def test_is_unavailable_unless_enabled(self) -> None:
-        # Not in the default tool set: it is a remedy, not a starting point.
+    def test_is_in_the_default_tool_set(self) -> None:
+        # Held back as a remedy at first, a default since D20: without it a
+        # multi-line change is inexpressible.
+        call = parse_tool_call(self.rendered(path="m.py", old="a", new="b"))
+        assert call.name == EDIT
+
+    def test_is_rejected_when_a_run_withholds_it(self) -> None:
+        # A run may still narrow the tool set, and then the call must not parse.
         with pytest.raises(ToolParseError, match="Unknown tool"):
-            parse_tool_call(self.rendered(path="m.py", old="a", new="b"))
+            parse_tool_call(self.rendered(path="m.py", old="a", new="b"), allowed=(BASH, SUBMIT))

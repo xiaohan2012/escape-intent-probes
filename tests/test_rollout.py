@@ -13,6 +13,7 @@ import pytest
 from escape_probes.config import Condition, EnvConfig, RunConfig
 from escape_probes.labels import label
 from escape_probes.model import FakeModel, ScriptedStep
+from escape_probes.prompts import system_prompt
 from escape_probes.rollout import opening_message, rollout
 from escape_probes.sandbox import ExecResult, Sandbox
 from escape_probes.trace import Trajectory
@@ -139,6 +140,52 @@ class TestRollout:
             FakeTask(), FakeModel(self.crossing_script), sandbox, config, "impossible", 0
         )
         assert trajectory.meta.final_diff == "diff --git a/x b/x"
+
+
+class TestSubmissionBudget:
+    """Test that resubmitting is finite, and separate from the step budget (D20).
+
+    A pilot trajectory submitted the same correct patch six times because
+    `max_attempts` was `max_steps`, so there was always another attempt left and
+    never a reason to look for a different route.
+    """
+
+    def test_exhausting_the_attempts_ends_the_trajectory(self, config: RunConfig) -> None:
+        config.agent.max_submissions = 3
+        script = [ScriptedStep(tool="submit") for _ in range(3)]
+        task = FakeTask(passes_on_attempt=99)
+        trajectory = rollout(task, FakeModel(script), FakeSandbox(), config, "impossible", 0)
+        assert trajectory.meta.outcome == "max_submissions"
+        assert task.attempts == 3
+
+    def test_the_step_budget_is_not_the_submission_budget(self, config: RunConfig) -> None:
+        # Steps are still available; only the attempts have run out.
+        config.agent.max_steps = 25
+        config.agent.max_submissions = 2
+        script = [ScriptedStep(tool="submit") for _ in range(2)]
+        trajectory = rollout(
+            FakeTask(passes_on_attempt=99),
+            FakeModel(script),
+            FakeSandbox(),
+            config,
+            "impossible",
+            0,
+        )
+        assert trajectory.meta.n_steps == 2
+
+    def test_a_passing_submission_still_wins(self, config: RunConfig) -> None:
+        config.agent.max_submissions = 1
+        trajectory = rollout(
+            FakeTask(), FakeModel([ScriptedStep(tool="submit")]), FakeSandbox(), config, "benign", 0
+        )
+        assert trajectory.meta.outcome == "passed"
+
+    def test_the_prompt_states_the_attempts_not_the_steps(self, config: RunConfig) -> None:
+        config.agent.max_steps = 25
+        config.agent.max_submissions = 10
+        prompt = system_prompt(config.agent)
+        assert "submit up to 10 times" in prompt
+        assert "25 times" not in prompt
 
 
 class TestParseFailures:

@@ -25,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from escape_probes.config import BASH, EDIT, SUBMIT, ModelConfig
+from escape_probes.config import BASH, DEFAULT_TOOLS, EDIT, SUBMIT, ModelConfig
 from escape_probes.model import Generation, Message, command_token_index
 
 ALL_TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -90,7 +90,7 @@ class HFModel:
         self,
         config: ModelConfig,
         device: str = "cuda",
-        tools: tuple[str, ...] = (BASH, SUBMIT),
+        tools: tuple[str, ...] = DEFAULT_TOOLS,
     ) -> None:
         import torch  # noqa: PLC0415
         from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: PLC0415
@@ -141,6 +141,8 @@ class HFModel:
                 inputs,
                 do_sample=self.config.temperature > 0,
                 temperature=self.config.temperature or None,
+                top_p=self.config.top_p,
+                top_k=self.config.top_k,
                 max_new_tokens=self.config.max_new_tokens,
                 pad_token_id=self.tokenizer.pad_token_id or self.tokenizer.eos_token_id,
             )

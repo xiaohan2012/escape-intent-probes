@@ -41,7 +41,7 @@ from pydantic import BaseModel, Field
 from escape_probes.config import Condition
 from escape_probes.model import Generation
 
-Outcome = Literal["passed", "failed", "max_steps", "parse_failed", "error"]
+Outcome = Literal["passed", "failed", "max_steps", "max_submissions", "parse_failed", "error"]
 
 
 class Step(BaseModel):
