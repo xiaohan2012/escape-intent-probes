@@ -96,6 +96,8 @@ class TrajectoryMeta(BaseModel):
     instance_id: str
     condition: Condition
     seed: int
+    """Which replicate this is, not a number handed to any sampler. See
+    `RunConfig.seeds`."""
 
     model_id: str
     backend: str = "hf"
