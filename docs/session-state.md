@@ -43,17 +43,28 @@ ssh eip 'cd ~/eip && python3 /tmp/steptime.py'
 
 ## What is running
 
-Pass 1, launched 17:09 box time, batch 24.
+Pass 1 **relaunched 19:55 box time** via `/tmp/full2.sh` -> `run_on_box.sh`
+(lock + container cleanup + GPU free), after killing the original 17:09 run
+once batch 2 landed. The restart picks up all of today's code: per-step
+`cached_tokens`, live per-round `cache NN%` lines, `finish_reason`, full
+sampling config in meta.
 
 ```
-configs/probe-01-qwen3.8-27b.yaml          72 impossible   3 batches
-configs/probe-01-qwen3.8-27b-benign.yaml   24 benign       1 batch
+impossible: 42/72 saved (batch 1: 24, batch 2: 18); batch 3 runs the
+            remaining 30 (24 + 6 setup-failed retries)
+benign:     starts automatically after (24, one batch)
 ```
 
-**Batch 1 of 3 finished — 82.6 min, 206 s per trajectory.** Batch 2 runs 18 wide,
-not 24: six trajectories were lost to setup timeouts caused by 58 orphaned
-containers competing for 26 cores. They wrote no `meta.json`, so **re-running
-the same config after the run picks exactly those six up** (~10 min).
+**Batch 1: 82.6 min. Batch 2: ~85 min, 18 wide** (6 lost to setup timeouts
+from orphaned containers — cleanup now guaranteed by run_on_box.sh).
+Cumulative funnel at 42: recon=28 saw=37 read=14 crossed=12 (29%) tests=4.
+
+**Prefix cache diagnosed healthy** (cache-smoke, 8x4 steps, ~15 min): rounds
+1-3 read 59% -> 68% -> 74%, reused counts block-aligned at 784 tokens — the
+cache hits the full previous sequence and the discount is granularity, not
+vLLM #45238 and not eviction. No tuning warranted. Watch batch 3's live lines
+for eviction under real load (24 wide, long contexts) — the smoke cannot test
+that.
 
 Per-step generation time, read from `steps.jsonl` rather than inferred:
 
@@ -84,23 +95,16 @@ live: the API served an unknown quantization, and we run at
 `read = 9` against `crossed = 7`: **two trajectories read the cue and declined**,
 a higher share than the 1-in-118 seen before.
 
-## Paused mid-task — resume here
+## Audit follow-through — all closed
 
-`Generation.cached_tokens` and `vllm_backend.cached_prompt_tokens` are committed
-(`3fa44b3`, 462 tests green). **What is left:** print it from
-`scripts/run_batch.py`'s `summarise` or the per-trajectory line, then
-`ssh eip 'cd ~/eip && git pull'` so the **benign arm** picks it up when the
-impossible arm finishes. The impossible arm now running is undisturbed — the two
-arms are separate `run_batch.py` invocations, so the second one loads whatever
-is on disk at that time.
-
-**What the number means.** A hybrid model's prefix cache is all-or-nothing
-across the model: one KV-cache group that cannot match drags the reconciled hit
-to zero, re-prefilling the 16 full-attention layers that matched perfectly
-(vLLM #45238, ~2x TTFT). Every round after the first should be nearly all hit
-here, since each prompt is the previous plus a suffix. **A zero from round 2
-onwards is the bug**, and the fix is `--prefix-match-unit` set to a small
-divisor of the block size vLLM logs as `"Setting attention block size to N"`.
+Both audits' items are done (commits `6b5fc4b`..`7de9c4f`): B1 fp32 + finite
+check, B2/O1 hooked GPU-side gather + no LM head, O2 one forward per
+trajectory (equivalence-tested), O3 explicit sdpa, B3 --layers removed, B4
+repetition_penalty pinned + meta echoes top_p/top_k/max_new_tokens, B5
+finish_reason on every Step, B6 atomic writes + meta.json last, O6
+uncompressed npz, O7 sweep skips embedding row. extract.py verifies its hook
+capture against output_hidden_states at startup. Skill PR **#9** distills the
+lessons (`.claude/skills/vllm-cuda-optimization/`).
 
 ## Measurement discipline — three proxies were wrong today
 
