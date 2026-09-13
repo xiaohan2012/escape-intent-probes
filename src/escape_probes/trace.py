@@ -66,6 +66,23 @@ class Step(BaseModel):
     tool_arguments: dict[str, str] = Field(default_factory=dict)
     parse_error: str | None = None
 
+    generation_text: str = ""
+    """Everything the model emitted this step, verbatim: reasoning, prose, and
+    the rendered tool call.
+
+    Redundant with `gen_span` on a local backend, where the token ids are the
+    frozen asset (D12) — and the only record on a hosted one, where there are no
+    ids and both spans are `(0, 0)`. Without it a hosted trajectory keeps the
+    parsed call and the observation and discards the rest, which for
+    `qwen3.8-27b` is about 700 of every 730 tokens the model wrote. Pass 2
+    cannot reconstruct a conversation from the remainder, and the part missing —
+    the model's own reasoning about what it found — is where intent is most
+    likely to be legible.
+
+    Empty on the 158 trajectories written before this field existed. Empty is
+    left meaning "not recorded" rather than "said nothing", so an analysis can
+    refuse to run on them instead of quietly reading a truncated conversation."""
+
     observation: str = ""
     """Untruncated. What the model saw may have been shortened to fit the
     context, but no analysis should depend on that choice."""
@@ -187,6 +204,7 @@ class TrajectoryWriter:
             prompt_span=(0, len(prompt)),
             gen_span=(len(prompt), len(self.token_ids)),
             tool_start_token_idx=None if offset is None else len(prompt) + offset,
+            generation_text=generation.text,
             prompt_tokens=generation.prompt_tokens,
             completion_tokens=generation.completion_tokens,
             **fields,
