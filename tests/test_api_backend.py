@@ -344,6 +344,9 @@ class TestHTTPTransportErrors:
         config = ModelConfig(backend="openrouter", model_id="deepseek/deepseek-v4-pro-0813")
         transport = HTTPTransport.__new__(HTTPTransport)
         transport.url = "https://openrouter.ai/api/v1/chat/completions"
+        transport.max_attempts = config.max_attempts
+        transport.backoff_seconds = config.backoff_seconds
+        transport.sleep = lambda _seconds: None
         transport.client = httpx.Client(
             transport=httpx.MockTransport(
                 lambda request: httpx.Response(
@@ -361,3 +364,70 @@ class TestHTTPTransportErrors:
         )
         with pytest.raises(RuntimeError, match="guardrail restrictions"):
             transport.post({"model": config.model_id})
+
+
+class TestHTTPTransportRetries:
+    """Test that a transient rejection is retried and a permanent one is not.
+
+    Thirty-odd concurrent trajectories against one pinned provider endpoint will
+    be rate-limited, and a 429 that propagates costs the whole trajectory —
+    every step already generated is thrown away and the money with it. The
+    distinction that matters is transient (429, 5xx: retry) against permanent
+    (404 from a provider pin, 400 from a malformed payload: raising immediately
+    is the only thing that surfaces a configuration error).
+    """
+
+    def transport(self, responses: list[int], sleeps: list[float]) -> Any:
+        import httpx
+
+        from escape_probes.api_backend import HTTPTransport
+
+        remaining = list(responses)
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            status = remaining.pop(0)
+            if status == 200:
+                return httpx.Response(200, json={"choices": [], "ok": True})
+            return httpx.Response(status, json={"error": {"message": f"status {status}"}})
+
+        transport = HTTPTransport.__new__(HTTPTransport)
+        transport.url = "https://openrouter.ai/api/v1/chat/completions"
+        transport.client = httpx.Client(transport=httpx.MockTransport(handle))
+        transport.max_attempts = 4
+        transport.backoff_seconds = 0.5
+        transport.sleep = sleeps.append
+        return transport
+
+    def test_a_rate_limit_is_retried_until_it_succeeds(self) -> None:
+        sleeps: list[float] = []
+        transport = self.transport([429, 429, 200], sleeps)
+        assert transport.post({"model": "m"})["ok"] is True
+        assert len(sleeps) == 2
+
+    def test_the_wait_grows(self) -> None:
+        # Retrying a rate limit at a fixed interval is how a cell gets stuck
+        # hammering a provider that is telling it to slow down.
+        sleeps: list[float] = []
+        self.transport([429, 429, 429, 200], sleeps).post({"model": "m"})
+        assert sleeps == [0.5, 1.0, 2.0]
+
+    def test_a_server_error_is_retried(self) -> None:
+        sleeps: list[float] = []
+        assert self.transport([503, 200], sleeps).post({"model": "m"})["ok"] is True
+
+    @pytest.mark.parametrize("status", [400, 401, 404, 422])
+    def test_a_permanent_error_raises_at_once(self, status: int) -> None:
+        # The 404 lesson: a provider pin the data policy rejects must fail fast
+        # and loudly, not be retried four times and then reported as a timeout.
+        sleeps: list[float] = []
+        transport = self.transport([status], sleeps)
+        with pytest.raises(RuntimeError, match=f"status {status}"):
+            transport.post({"model": "m"})
+        assert sleeps == []
+
+    def test_it_gives_up_and_says_the_status(self) -> None:
+        sleeps: list[float] = []
+        transport = self.transport([429, 429, 429, 429], sleeps)
+        with pytest.raises(RuntimeError, match="429"):
+            transport.post({"model": "m"})
+        assert len(sleeps) == 3

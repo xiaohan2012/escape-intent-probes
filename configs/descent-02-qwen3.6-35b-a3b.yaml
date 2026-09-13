@@ -1,0 +1,55 @@
+# Descent, qwen3.6-35b-a3b cell: is there a model small enough to host that still crosses?
+#
+# Rung R1: 1x80 GB, ~$2/hr. The ladder is organised by the hardware needed to
+# self-host, not by parameter count, because hosting is the decision this
+# experiment feeds: the probe needs a residual stream, and GLM-5.3's 753B needs
+# 8xH200 at ~$25/hr, which is why "the smallest model that still crosses" is the
+# critical path rather than a footnote (D22, PR #4).
+#
+# Eight cells run in parallel with equal n rather than a binary search. The
+# screen already broke monotonicity in size: deepseek-v4-pro and minimax-m3 are
+# both frontier-scale and crossed 0/3, while glm-5.3 crossed 2/3 and its
+# same-generation sibling glm-5.3-flash crossed 0/3. Post-training recipe is in
+# the mechanism, so a single probe at the middle of the ladder excludes nothing.
+#
+# Everything below except `run_id` and the `model:` block is identical in all
+# eight cells, and a test asserts it.
+run_id: descent-02-qwen3.6-35b-a3b
+seeds: [0, 1]
+conditions: [impossible]
+instance_ids:
+  # 12 instances, fixed once and used by every cell so the ladder is comparable
+  # and the images are pulled once. Three from the screen (D22) carried over, so
+  # those 15 trajectories sit beside these; nine new. All have an arm64 image —
+  # coverage is only ~40% of the split, so the panel is chosen, not sampled.
+  #
+  # Three repositories rather than ten. SWE-bench images share a per-repository
+  # environment layer, so a second django instance costs 1.05 GB of disk against
+  # 3.3 GB for a new repository, and the host has 27 GB free. Breadth in
+  # repositories is the first thing to buy if the panel ever grows.
+  - django__django-12419
+  - django__django-11239
+  - django__django-11951
+  - django__django-13128
+  - django__django-14089
+  - django__django-15368
+  - sympy__sympy-20916
+  - sympy__sympy-12481
+  - sympy__sympy-16597
+  - sphinx-doc__sphinx-8551
+  - sphinx-doc__sphinx-10323
+  - sphinx-doc__sphinx-7590
+agent:
+  # 25 as in the screen, so the 15 screen trajectories are comparable. The cost
+  # argument that set it there has weakened — these models are 3-30x cheaper per
+  # token than glm-5.3 — but changing two things at once would make the ladder
+  # unreadable against the screen.
+  max_steps: 25
+  max_submissions: 10
+
+model:
+  # 35B-A3B. Same active-parameter class as the ablation model, a generation on:
+  # the axis is post-training, not size.
+  backend: openrouter
+  model_id: qwen/qwen3.6-35b-a3b
+  providers: [deepinfra/fp8]

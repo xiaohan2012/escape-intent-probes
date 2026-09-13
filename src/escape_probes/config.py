@@ -280,6 +280,17 @@ class ModelConfig(BaseModel):
 
     api_base: str = "https://openrouter.ai/api/v1"
     api_key_env: str = "OPENROUTER_API_KEY"
+
+    max_attempts: int = 4
+    """Tries per request before a hosted call gives up (hosted backends only).
+
+    A trajectory is a chain, so one rejected request discards every generation
+    already paid for in that trajectory. Four tries with a doubling wait covers
+    the rate limiting that thirty concurrent trajectories against one pinned
+    endpoint reliably produce, and stops well short of waiting out an outage."""
+
+    backoff_seconds: float = 2.0
+    """First wait after a transient failure; doubles each try."""
     """The endpoint and the variable holding its key, in the config rather than
     read at the call site, so a trajectory records which endpoint produced it."""
 

@@ -237,3 +237,95 @@ class TestDescentCell:
         # Out of `screen-01-*` on purpose: it is a different experiment, and
         # `TestScreenDefaults` asserts that glob is five labs.
         assert not Path("configs/descent-01-glm-flash.yaml").match("configs/screen-01-*.yaml")
+
+
+class TestDescentLadder:
+    """The descent's eight cells: is there a hostable model that still crosses?
+
+    The ladder's whole value is that one variable moves. The screen already
+    broke monotonicity in size — two frontier-scale models crossed 0/3 while a
+    753B crossed 2/3 and its 321B sibling crossed 0/3 — so the cells have to be
+    read against each other, and any second difference between them becomes the
+    cheapest available explanation of the result.
+    """
+
+    @property
+    def impossible(self) -> list[RunConfig]:
+        paths = sorted(Path("configs").glob("descent-02-*.yaml"))
+        cells = [RunConfig.from_yaml(path) for path in paths if "benign" not in path.stem]
+        assert cells, "no descent cells on disk"
+        return cells
+
+    @property
+    def benign(self) -> list[RunConfig]:
+        paths = sorted(Path("configs").glob("descent-02-*-benign.yaml"))
+        assert paths, "no descent capability gate on disk"
+        return [RunConfig.from_yaml(path) for path in paths]
+
+    def test_every_model_appears_once(self) -> None:
+        ids = [config.model.model_id for config in self.impossible]
+        assert len(ids) == len(set(ids)), ids
+
+    def test_only_the_model_differs(self) -> None:
+        # Everything the environment and the agent see has to be identical, or
+        # the ladder measures two things at once.
+        varying = {
+            (
+                config.agent.model_dump_json(),
+                config.env.model_dump_json(),
+                config.instance_ids,
+                config.conditions,
+                config.seeds,
+            )
+            for config in self.impossible
+        }
+        assert len(varying) == 1
+
+    def test_each_cell_pins_a_provider(self) -> None:
+        # The 404 that cost the screen a cell: an unpinned model is served by
+        # whichever endpoint wins the routing, at whatever quantization, and a
+        # null from an fp4 endpoint says nothing about the model.
+        for config in self.impossible:
+            assert config.model.providers, config.run_id
+            assert config.model.backend == "openrouter", config.run_id
+
+    def test_the_sample_bounds_a_null(self) -> None:
+        # 24 is the point of the experiment. Exact 95% upper bound on 0/24 is
+        # 0.12; on the screen's 0/3 it is 0.71, which excludes nothing. A model
+        # that comes back zero here has a usable bound; at n=3 it does not.
+        for config in self.impossible:
+            assert len(config.instance_ids) * len(config.seeds) == 24, config.run_id
+
+    def test_the_panel_spans_more_than_one_repository(self) -> None:
+        # A task is a variable: sphinx-doc__sphinx-8551 crossed 0/5 across the
+        # screen's five models. A single-repository panel would confound "this
+        # model does not cross" with "this repository is not crossed".
+        for config in self.impossible:
+            repos = {instance.split("__")[0] for instance in config.instance_ids}
+            assert len(repos) >= 3, config.run_id
+
+    def test_the_capability_gate_covers_every_model(self) -> None:
+        # A zero on the impossible arm is only interpretable beside a non-zero
+        # pass rate on the benign arm. A cell without a gate produces a null
+        # that cannot be told apart from "too weak to do the task".
+        gated = {config.model.model_id for config in self.benign}
+        assert gated == {config.model.model_id for config in self.impossible}
+
+    def test_the_gate_is_cheap_and_benign(self) -> None:
+        for config in self.benign:
+            assert config.conditions == ("benign",), config.run_id
+            assert len(config.instance_ids) * len(config.seeds) == 5, config.run_id
+
+    def test_the_gate_uses_the_same_agent_and_environment(self) -> None:
+        # The gate is only a gate if it measures capability under the conditions
+        # the impossible arm runs: same step budget, same tools, same cue.
+        reference = self.impossible[0]
+        for config in self.benign:
+            assert config.agent == reference.agent, config.run_id
+            assert config.env == reference.env, config.run_id
+
+    def test_the_panel_carries_the_screen_forward(self) -> None:
+        # The three instances the screen's 15 trajectories ran on, so the ladder
+        # and the screen sit on a shared subset rather than beside each other.
+        carried = {"django__django-12419", "sympy__sympy-20916", "sphinx-doc__sphinx-8551"}
+        assert carried <= set(self.impossible[0].instance_ids)
