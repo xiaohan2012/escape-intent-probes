@@ -149,7 +149,15 @@ def main() -> int:
 
     if args.config is not None:
         # The config wins, and says so by overwriting the flags rather than
-        # sitting beside them in a second set of names.
+        # sitting beside them in a second set of names. `--run-id` is the one
+        # flag that cannot be overwritten, because it names the output
+        # directory: silently ignoring it wrote a throwaway 3-step measurement
+        # into the probe dataset, and the resume logic then skipped those eight
+        # work items as already finished. A flag that does nothing is worse than
+        # one that refuses.
+        if parser.get_default("run_id") != args.run_id:
+            print("--run-id has no effect with --config; the config names the run", file=sys.stderr)
+            return 1
         config = RunConfig.from_yaml(args.config)
         args.instances = list(config.instance_ids)
         args.conditions = list(config.conditions)
