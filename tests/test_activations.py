@@ -33,7 +33,16 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from escape_probes.activations import POSITIONS, StepPositions, stack_positions, step_positions
+from escape_probes.activations import (
+    POSITIONS,
+    GatherPlan,
+    StepPositions,
+    StepSlots,
+    assemble,
+    gather_plan,
+    stack_positions,
+    step_positions,
+)
 from escape_probes.trace import Step
 
 
@@ -123,12 +132,13 @@ class TestStackPositions:
         assert "command" not in stacked
         assert set(stacked) == {"last_prompt", "generated"}
 
-    def test_it_stores_half_precision(self) -> None:
-        # 96 trajectories x 25 steps x 65 layers x 3 positions x 5120 features is
-        # 4.8 GB in fp16 and 9.6 in fp32, and the probe is fitted in float64
-        # after loading regardless.
-        stacked = stack_positions(self.hidden, step_positions(make_step()), dtype=np.float16)
-        assert stacked["last_prompt"].dtype == np.float16
+    def test_it_stores_fp32_by_default(self) -> None:
+        # Not fp16: the model runs bf16, whose range fp16 does not cover, and
+        # Qwen-family residual streams carry outliers past fp16's 65504 —
+        # `astype(np.float16)` maps those to inf silently, and `standardise`
+        # then NaNs the whole column. bf16 -> fp32 is exact.
+        stacked = stack_positions(self.hidden, step_positions(make_step()))
+        assert stacked["last_prompt"].dtype == np.float32
 
 
 class TestStepPositionsRoundTrip:
@@ -146,3 +156,138 @@ class TestStepPositionsRoundTrip:
         assert step_positions(make_step()) == StepPositions(
             last_prompt=9, command=13, generated=(10, 16)
         )
+
+
+class TestGatherPlan:
+    """One forward per trajectory: which rows that forward must gather."""
+
+    @property
+    def steps(self) -> list[Step]:
+        # Three nesting steps: with a tool call, without one, with again.
+        return [
+            make_step(idx=0, prompt_end=10, gen_end=16, tool_start=13),
+            make_step(idx=1, prompt_end=20, gen_end=24, tool_start=None),
+            make_step(idx=2, prompt_end=30, gen_end=38, tool_start=31),
+        ]
+
+    def test_length_covers_the_last_generation(self) -> None:
+        assert gather_plan(self.steps).length == 38
+
+    def test_points_are_sorted_and_unique(self) -> None:
+        # last_prompt tokens 9, 19, 29 and command tokens 13, 31.
+        assert gather_plan(self.steps).points == (9, 13, 19, 29, 31)
+
+    def test_spans_are_the_generations_in_step_order(self) -> None:
+        assert gather_plan(self.steps).spans == ((10, 16), (20, 24), (30, 38))
+
+    def test_slots_point_back_into_the_matrices(self) -> None:
+        plan = gather_plan(self.steps)
+        assert plan.steps[0] == StepSlots(step_idx=0, last_prompt=0, command=1, generated=0)
+        assert plan.steps[1] == StepSlots(step_idx=1, last_prompt=2, command=None, generated=1)
+        assert plan.steps[2] == StepSlots(step_idx=2, last_prompt=3, command=4, generated=2)
+
+    def test_a_shared_index_is_gathered_once(self) -> None:
+        # A command on the very last prompt token of a later step collides with
+        # nothing here, but two steps can share indices only through dedup —
+        # the plan must map both slots to the same row.
+        steps = [
+            make_step(idx=0, prompt_end=10, gen_end=16, tool_start=13),
+            make_step(idx=1, prompt_end=14, gen_end=20, tool_start=None),
+        ]
+        plan = gather_plan(steps)
+        assert plan.points == (9, 13)
+        assert plan.steps[1].last_prompt == 1  # token 13, the same row as step 0's command
+
+    def test_an_empty_generation_has_no_span(self) -> None:
+        steps = [make_step(idx=0, prompt_end=10, gen_end=10, tool_start=None)]
+        plan = gather_plan(steps)
+        assert plan.spans == ()
+        assert plan.steps[0].generated is None
+
+    def test_it_refuses_an_out_of_span_command(self) -> None:
+        with pytest.raises(ValueError, match="outside"):
+            gather_plan([make_step(tool_start=9)])
+
+    def test_it_refuses_no_steps(self) -> None:
+        with pytest.raises(ValueError, match="no steps"):
+            gather_plan([])
+
+
+class TestAssemble:
+    """The one-forward result must equal the per-step extraction, exactly."""
+
+    @property
+    def steps(self) -> list[Step]:
+        return [
+            make_step(idx=0, prompt_end=10, gen_end=16, tool_start=13),
+            make_step(idx=1, prompt_end=20, gen_end=24, tool_start=None),
+            make_step(idx=2, prompt_end=30, gen_end=38, tool_start=31),
+        ]
+
+    @property
+    def hidden(self) -> np.ndarray:
+        # The full trajectory's stream: token t's vector is t + 100 * layer,
+        # so any wrong row is identifiable by value.
+        layers, tokens, features = 3, 38, 4
+        states = np.zeros((layers, tokens, features), dtype=np.float32)
+        for layer in range(layers):
+            for token in range(tokens):
+                states[layer, token] = token + 100 * layer
+        return states
+
+    def matrices(self, plan: GatherPlan) -> tuple[np.ndarray, np.ndarray]:
+        """What the forward hooks would gather from `self.hidden`."""
+        hidden = self.hidden
+        points = hidden[:, list(plan.points), :]
+        spans = (
+            np.stack([hidden[:, start:end, :].mean(axis=1) for start, end in plan.spans], axis=1)
+            if plan.spans
+            else np.zeros((hidden.shape[0], 0, hidden.shape[2]), dtype=np.float32)
+        )
+        return points, spans
+
+    def assembled(self) -> dict[str, np.ndarray]:
+        plan = gather_plan(self.steps)
+        return assemble(plan, *self.matrices(plan))
+
+    def test_it_equals_the_per_step_extraction(self) -> None:
+        # The exactness claim behind one-forward-per-trajectory: positions are
+        # absolute and spans nest, so slicing the full stream per step must
+        # reproduce the per-step `stack_positions` path bit for bit.
+        by_step: dict[str, list[np.ndarray]] = {name: [] for name in POSITIONS}
+        for step in self.steps:
+            stacked = stack_positions(self.hidden, step_positions(step))
+            for name, vector in stacked.items():
+                by_step[name].append(vector)
+        assembled = self.assembled()
+        for name in POSITIONS:
+            np.testing.assert_array_equal(assembled[name], np.stack(by_step[name]))
+
+    def test_a_missing_position_is_absent_with_its_step_index(self) -> None:
+        assembled = self.assembled()
+        np.testing.assert_array_equal(assembled["command_steps"], [0, 2])
+        np.testing.assert_array_equal(assembled["last_prompt_steps"], [0, 1, 2])
+
+    def test_it_stores_fp32(self) -> None:
+        assert self.assembled()["last_prompt"].dtype == np.float32
+
+    def test_it_refuses_non_finite_values(self) -> None:
+        # The model can produce an inf (bf16 overflow travels through the
+        # forward); storing it poisons `standardise` into NaN for the column
+        # and the probe trains on the corruption without a word.
+        plan = gather_plan(self.steps)
+        points, spans = self.matrices(plan)
+        points[1, 2] = np.inf
+        with pytest.raises(ValueError, match="non-finite"):
+            assemble(plan, points, spans)
+
+    @pytest.mark.parametrize("axis", ["points", "spans"])
+    def test_it_refuses_a_matrix_of_the_wrong_width(self, axis: str) -> None:
+        plan = gather_plan(self.steps)
+        points, spans = self.matrices(plan)
+        if axis == "points":
+            points = points[:, :-1]
+        else:
+            spans = spans[:, :-1]
+        with pytest.raises(ValueError, match="rows for"):
+            assemble(plan, points, spans)

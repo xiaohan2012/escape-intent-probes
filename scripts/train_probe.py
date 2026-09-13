@@ -187,7 +187,9 @@ def main() -> int:
             print(f"{position:<12} (no activations stored)")
             continue
         depth = next(iter(next(iter(activations.values())).values())).shape[0]
-        layers = np.linspace(0, depth - 1, args.layers, dtype=int)
+        # From 1, not 0: row 0 is the embedding output, which cannot carry
+        # intent beyond token identity — a sweep slot spent there is wasted.
+        layers = np.linspace(1, depth - 1, args.layers, dtype=int)
 
         for rule in args.rule:
             for layer in layers:

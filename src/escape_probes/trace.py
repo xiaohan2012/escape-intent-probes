@@ -155,12 +155,16 @@ class Trajectory(BaseModel):
     token_ids: list[int]
 
     def save(self, directory: Path) -> None:
+        # meta.json last: it is the marker resume (`run_batch`) and Pass 2 key
+        # on, so it must not exist before the files it vouches for do — a kill
+        # between writes would otherwise leave a "finished" trajectory with no
+        # tokens.npy that is never re-run and crashes extraction.
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / "meta.json").write_text(self.meta.model_dump_json(indent=2))
         with (directory / "steps.jsonl").open("w") as handle:
             for step in self.steps:
                 handle.write(step.model_dump_json() + "\n")
         np.save(directory / "tokens.npy", np.asarray(self.token_ids, dtype=np.int32))
+        (directory / "meta.json").write_text(self.meta.model_dump_json(indent=2))
 
     @classmethod
     def load(cls, directory: Path) -> Trajectory:
