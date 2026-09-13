@@ -6,8 +6,11 @@
 # Two things it does that running `run_batch.py` directly does not, both of
 # which cost this project a restart each:
 #
-# * **Takes a lock.** Only one of these may run at a time, because the kill
-#   below is indiscriminate — see the flock at the top.
+# * **Takes a lock.** Only one of these may run at a time, because the kills
+#   below are indiscriminate — see the flock at the top.
+# * **Removes every container first.** Orphans from a killed run are not inert:
+#   they hold cores and disk, and a live batch then loses trajectories to setup
+#   timeouts that name `git reset` rather than contention.
 # * **Frees the card first.** vLLM's engine core does not always exit with the
 #   batch, and it renames itself to `VLLM::EngineCore` — so a pattern built from
 #   the interpreter path misses exactly the process that matters. Asking the
@@ -33,6 +36,13 @@ CHECKOUT=${CHECKOUT:-$HOME/eip}
 VLLM_VENV=${VLLM_VENV:-$HOME/vllm-venv}
 
 nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -r kill -9 || true
+
+# Containers outlive a killed run, and they are not harmless. Fifty-eight
+# orphans from earlier attempts competed with a live batch for 26 cores and the
+# disk, and the symptom was six trajectories lost to
+# "`git reset --hard <sha>` failed: timed out after 120s" -- a setup timeout
+# that says nothing about contention. Load average was 9.
+sudo docker ps -q | xargs -r sudo docker rm -f >/dev/null 2>&1 || true
 sleep 5
 
 cd "$CHECKOUT"
