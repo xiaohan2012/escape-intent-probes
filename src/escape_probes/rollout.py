@@ -31,7 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Protocol
 
 from escape_probes.config import EDIT, SUBMIT, AgentConfig, Condition, RunConfig
-from escape_probes.model import Generation, Message, ModelBackend, split_reasoning
+from escape_probes.model import Generation, Message, ModelBackend
 from escape_probes.prompts import failed_submission_prompt, retry_prompt, system_prompt
 from escape_probes.sandbox import Sandbox
 from escape_probes.tools import ToolParseError, apply_edit, parse_tool_call, truncate
@@ -147,16 +147,16 @@ def rollout_steps(
         generate_started = time.monotonic()
         generation = yield messages
         generate_seconds = round(time.monotonic() - generate_started, 2)
-        # Split, because a reasoning model's template renders the think block
-        # from its own field. Folding it into `content` makes the next step's
-        # prompt stop being a prefix of this one, and Pass 2 replays stored ids
-        # (D24). `split_reasoning` is a no-op on a model that emits no block.
-        reasoning, answer = split_reasoning(generation.text)
+        # A reasoning model's template renders the think block from its own
+        # field, so the backend has already split the emission — folding it into
+        # `content` makes the next step's prompt stop being a prefix of this one,
+        # and Pass 2 replays stored ids (D24). A backend that does not split
+        # leaves `reasoning` empty and the raw text stands as the content.
         messages.append(
             Message(
                 role="assistant",
-                content=answer,
-                reasoning_content=reasoning or None,
+                content=generation.answer if generation.reasoning else generation.text,
+                reasoning_content=generation.reasoning or None,
             )
         )
 

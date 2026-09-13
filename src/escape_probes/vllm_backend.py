@@ -31,7 +31,13 @@ from typing import Protocol
 
 from escape_probes.chat import render_prompt, select_tool_schemas
 from escape_probes.config import DEFAULT_TOOLS, ModelConfig
-from escape_probes.model import Generation, Message, command_token_index
+from escape_probes.model import (
+    THINK_OPEN,
+    Generation,
+    Message,
+    command_token_index,
+    split_reasoning,
+)
 
 
 class Completion(Protocol):
@@ -115,10 +121,19 @@ class VLLMModel:
     def _to_generation(self, prompt_ids: list[int], completion: Completion) -> Generation:
         gen_ids = list(completion.token_ids)
         text = completion.text
+        # Whether the prompt ends inside a think block is a property of this
+        # model's template, and this is the only place that has rendered it. A
+        # reasoning model whose generation hit the token cap mid-thought emits
+        # no closing tag, and calling that text `content` makes the next step's
+        # prompt stop being a prefix (D24).
+        opened = self.tokenizer.decode(prompt_ids[-4:]).endswith(THINK_OPEN + "\n")
+        reasoning, answer = split_reasoning(text, think_opened=opened)
         return Generation(
             prompt_token_ids=tuple(prompt_ids),
             gen_token_ids=tuple(gen_ids),
             text=text,
+            reasoning=reasoning,
+            answer=answer,
             tool_start_token_idx=command_token_index(gen_ids, text, self._decode),
         )
 

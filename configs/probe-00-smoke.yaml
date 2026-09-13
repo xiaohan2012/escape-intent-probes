@@ -35,3 +35,8 @@ model:
   model_id: Qwen/Qwen3.8-27B
   dtype: bfloat16
   max_model_len: 32768
+  # 1024 truncated a think block mid-thought on step 3 of the first smoke run:
+  # the step burned its whole budget and emitted no tool call, so it cost a step
+  # and produced nothing. A reasoning model needs room to finish, and a thought
+  # cut in half is also the part of the trajectory the probe most wants to read.
+  max_new_tokens: 2048

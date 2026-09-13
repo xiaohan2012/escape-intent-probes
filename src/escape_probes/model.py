@@ -43,7 +43,7 @@ THINK_CLOSE = "</think>"
 THINK_OPEN = "<think>"
 
 
-def split_reasoning(text: str) -> tuple[str, str]:
+def split_reasoning(text: str, think_opened: bool = False) -> tuple[str, str]:
     """A reasoning model's emission, split into its think block and its answer.
 
     Qwen3.8-27B ends its generation prompt with `<think>\n`, so the model writes
@@ -62,13 +62,23 @@ def split_reasoning(text: str) -> tuple[str, str]:
     Both halves are trimmed because the template trims the reasoning and supplies
     the surrounding newlines itself; anything else fails to round-trip.
 
-    Text with no closing tag is all content, which is the non-reasoning case and
-    must stay untouched.
+    `think_opened` says whether the prompt ended inside a think block, which
+    only the backend knows — it rendered the prompt. With it, an unterminated
+    generation is all reasoning; without it, text with no closing tag is all
+    content, which is the non-reasoning case and must stay untouched.
     """
     head, tag, tail = text.partition(THINK_CLOSE)
-    if not tag:
-        return "", text.strip()
-    return head.removeprefix(THINK_OPEN).strip(), tail.strip()
+    if tag:
+        return head.removeprefix(THINK_OPEN).strip(), tail.strip()
+    if think_opened:
+        # The prompt opened a block the model never closed — it ran out of
+        # tokens mid-thought. All of it is reasoning, and calling it content
+        # renders `<think>\n\n</think>\n\n` in front of it on the next step.
+        # That is not merely ugly: `\n\n` is one token where `\n` + `\n` is
+        # two, so the re-render stops being a prefix and the failure surfaces a
+        # step later, pointing at the wrong step.
+        return text.strip(), ""
+    return "", text.strip()
 
 
 class Message(BaseModel):
@@ -95,6 +105,19 @@ class Generation(BaseModel):
     prompt_token_ids: tuple[int, ...]
     gen_token_ids: tuple[int, ...]
     text: str
+    """Everything the model emitted, verbatim. What gets parsed for a tool call."""
+
+    reasoning: str = ""
+    """The think block, already split out. Empty for a model whose template has
+    no such block, and for a turn that produced none.
+
+    Filled by the backend rather than by the loop, because whether the prompt
+    opened a think block is a property of the template and only the backend
+    rendered it (D24)."""
+
+    answer: str = ""
+    """What follows the think block. Empty when the generation was cut off
+    inside one."""
 
     tool_start_token_idx: int | None = None
     """Index into `gen_token_ids` of the first token of the tool call's command
