@@ -1368,9 +1368,39 @@ synchronous `LLM.generate` serialises under threads, so `drive_threaded` (which
 `APIModel` uses to good effect) would buy nothing without moving to the async
 engine.
 
-<!-- TODO: fill in when the first batch of 24 lands — seconds per round,
-     mean-to-max ratio within a round, and what the barrier actually costs
-     against the same work driven one trajectory at a time. -->
+`nvidia-smi dmon` settles both halves of it, and corrects the reasoning that
+led here. On a 24-wide round:
+
+```
+pwr  gtemp  mtemp   sm   mem   pclk
+124     81     85    0     0   1755     <- executing sandbox commands
+348     89     91  100    56   1050     <- generating, at the 350 W cap
+```
+
+**The card is power-capped, not batch-starved.** 348 W against a 350 W limit,
+core clock throttled from 1755 to 1050 MHz, memory at 93 °C. Widening the batch
+cannot help a card already spending its whole power budget — so the stated
+reason for going from 8 to 24 ("the GPU is only at 75%") was wrong, even though
+the change was right. `nvidia-smi`'s utilisation counts time with a kernel
+resident, not work done: it did not move between the two widths while throughput
+went from 85 to 156 tok/s. **Power draw is the headroom indicator; utilisation
+is not.**
+
+**Eight of fifteen samples were the first kind.** Close to half the wall clock
+was the card waiting for twenty-four `docker exec` calls to run one after
+another, because `drive_batch` advanced trajectories in a plain loop. Only the
+generation half of a round needs the barrier — it is what makes one engine call
+per round possible — so the sandbox half is now advanced in a thread pool. Each
+generator is still touched by exactly one thread per round; only the bookkeeping
+is shared, under a lock that also covers `on_error` so two workers cannot
+interleave a caller's output.
+
+After the change, eight consecutive samples read `sm 76–99%` at 183–232 W, with
+no idle point at all, and a round of 24 takes **1 min 45 s** — about 44 minutes
+for a batch of 24 at 25 steps.
+
+The lesson generalises past this card: the two measurements that mattered were
+power draw and throughput, and neither is the number a dashboard shows first.
 
 **What this implies for the next architecture.** Both of this session's
 throughput surprises came from the model being new rather than from the harness:
