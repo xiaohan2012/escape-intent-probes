@@ -50,6 +50,7 @@ class Completion(Protocol):
 
     token_ids: Sequence[int]
     text: str
+    finish_reason: str | None
 
 
 def cached_prompt_tokens(outputs: Sequence[Any]) -> list[int]:
@@ -163,6 +164,7 @@ class VLLMModel:
             text=text,
             reasoning=reasoning,
             answer=answer,
+            finish_reason=completion.finish_reason or "",
             cached_tokens=cached,
             tool_start_token_idx=command_token_index(gen_ids, text, self._decode),
         )

@@ -107,6 +107,16 @@ class Generation(BaseModel):
     text: str
     """Everything the model emitted, verbatim. What gets parsed for a tool call."""
 
+    finish_reason: str = ""
+    """Why generation ended: "stop" for a natural end, "length" for the
+    `max_new_tokens` cap. Empty when the backend did not say.
+
+    Recorded because a capped generation has no closing think tag, and that
+    truncation once surfaced two steps later as a prefix-assertion failure
+    pointing at a healthy step (D24). `len(gen_ids) == max_new_tokens` almost
+    recovers it post hoc, but a generation can also end naturally at exactly
+    the cap."""
+
     cached_tokens: int = -1
     """Prompt tokens the engine reused from its prefix cache, or -1 if it did
     not say.
