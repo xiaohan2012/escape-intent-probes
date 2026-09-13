@@ -345,3 +345,39 @@ class TestEagerDefault:
     def test_it_can_be_turned_off(self) -> None:
         # An architecture that survives capture should get the throughput back.
         assert ModelConfig(enforce_eager=False).enforce_eager is False
+
+
+class TestProbeDataset:
+    """Pass 1 for the probe: the two arms that feed the fit (D24)."""
+
+    @property
+    def arms(self) -> dict[str, RunConfig]:
+        paths = sorted(Path("configs").glob("probe-01-*.yaml"))
+        assert paths, "no probe cells on disk"
+        return {path.stem: RunConfig.from_yaml(path) for path in paths}
+
+    def test_it_runs_locally(self) -> None:
+        # The whole point. A hosted backend returns no token ids, both spans are
+        # (0, 0), and add_step's prefix assertion -- the one thing that catches
+        # a re-rendered conversation -- becomes vacuous.
+        for name, config in self.arms.items():
+            assert config.model.backend == "vllm", name
+
+    def test_both_arms_share_the_panel(self) -> None:
+        # Folds cut on instance, so the negatives must cover the same tasks as
+        # the positives or some folds have no negatives at all.
+        panels = {config.instance_ids for config in self.arms.values()}
+        assert len(panels) == 1
+        assert len(next(iter(panels))) == 12
+
+    def test_the_arms_differ_only_in_condition_and_seeds(self) -> None:
+        configs = list(self.arms.values())
+        assert {c.agent.model_dump_json() for c in configs} == {configs[0].agent.model_dump_json()}
+        assert {c.model.model_dump_json() for c in configs} == {configs[0].model.model_dump_json()}
+
+    def test_generation_has_room_to_finish_a_thought(self) -> None:
+        # 1024 truncated a think block mid-thought, which costs a step, yields
+        # no tool call, and -- until the backend learned to treat an unterminated
+        # block as reasoning -- broke the prefix chain a step later (D24).
+        for name, config in self.arms.items():
+            assert config.model.max_new_tokens >= 2048, name
