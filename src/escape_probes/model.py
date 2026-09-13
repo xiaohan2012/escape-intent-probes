@@ -107,6 +107,17 @@ class Generation(BaseModel):
     text: str
     """Everything the model emitted, verbatim. What gets parsed for a tool call."""
 
+    cached_tokens: int = -1
+    """Prompt tokens the engine reused from its prefix cache, or -1 if it did
+    not say.
+
+    -1 rather than 0 because "the engine did not report" and "the engine reused
+    nothing" are different findings and only one of them is a bug. On a hybrid
+    model the cache is all-or-nothing across the whole model — one KV-cache
+    group that cannot match drags the reconciled hit to zero — and every round
+    after the first should be almost entirely a hit here, since each prompt is
+    the previous one plus a suffix."""
+
     reasoning: str = ""
     """The think block, already split out. Empty for a model whose template has
     no such block, and for a turn that produced none.

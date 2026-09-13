@@ -27,7 +27,7 @@ trajectory produced here is tokenised exactly as Pass 2 will re-tokenise it.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Any, Protocol
 
 from escape_probes.chat import render_prompt, select_tool_schemas
 from escape_probes.config import DEFAULT_TOOLS, ModelConfig
@@ -50,6 +50,29 @@ class Completion(Protocol):
 
     token_ids: Sequence[int]
     text: str
+
+
+def cached_prompt_tokens(outputs: Sequence[Any]) -> int:
+    """Prompt tokens the engine reused this round, or -1 if it did not say.
+
+    On a hybrid model — 48 gated-delta-net layers here against 16 full-attention
+    ones — a prefix-cache hit is reconciled across every KV-cache group into one
+    length, and a group that cannot match drags it to zero. The 16 layers that
+    matched perfectly are then re-prefilled anyway (vLLM #45238, roughly 2x TTFT
+    in their report).
+
+    Every round after the first should be almost entirely a hit here, because
+    each prompt is the previous one plus a suffix. A zero from round 2 onwards
+    means the whole conversation is being re-prefilled for every trajectory —
+    which costs a great deal and says nothing in any log, since this backend
+    used to discard the number.
+    """
+    if not outputs:
+        return -1
+    counts = [getattr(output, "num_cached_tokens", None) for output in outputs]
+    if any(count is None for count in counts):
+        return -1
+    return sum(counts)  # ty: ignore
 
 
 class VLLMModel:
@@ -113,12 +136,15 @@ class VLLMModel:
             [TokensPrompt(prompt_token_ids=ids) for ids in prompts],
             self._sampling,
         )
+        cached = cached_prompt_tokens(outputs)
         return [
-            self._to_generation(prompt_ids, output.outputs[0])
+            self._to_generation(prompt_ids, output.outputs[0], cached)
             for prompt_ids, output in zip(prompts, outputs, strict=True)
         ]
 
-    def _to_generation(self, prompt_ids: list[int], completion: Completion) -> Generation:
+    def _to_generation(
+        self, prompt_ids: list[int], completion: Completion, cached: int = -1
+    ) -> Generation:
         gen_ids = list(completion.token_ids)
         text = completion.text
         # Whether the prompt ends inside a think block is a property of this
@@ -134,6 +160,7 @@ class VLLMModel:
             text=text,
             reasoning=reasoning,
             answer=answer,
+            cached_tokens=cached,
             tool_start_token_idx=command_token_index(gen_ids, text, self._decode),
         )
 
