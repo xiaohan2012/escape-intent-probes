@@ -28,6 +28,7 @@ import hashlib
 import time
 from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 from typing import Protocol
 
 from escape_probes.config import EDIT, SUBMIT, AgentConfig, Condition, RunConfig
@@ -296,6 +297,7 @@ def drive_batch(
     """
     finished: dict[int, Trajectory] = {}
     pending: dict[int, list[Message]] = {}
+    guard = Lock()
 
     def advance(index: int, pump: Callable[[], list[Message]]) -> None:
         """One step of one trajectory, or its end. Never raises.
@@ -303,25 +305,57 @@ def drive_batch(
         `pump` is `next` on the first round and `send` afterwards; the caller
         supplies it so that the priming round and the steady state share this
         error handling rather than each having its own copy of it.
+
+        Runs in a worker thread. Only the bookkeeping is shared, and only under
+        the lock: the generator itself is advanced by exactly one thread per
+        round, and `on_error` is called from inside the lock so a caller that
+        prints does not interleave with another worker's line.
         """
         try:
-            pending[index] = pump()
+            result = pump()
         except StopIteration as done:
-            finished[index] = done.value
+            with guard:
+                finished[index] = done.value
         except Exception as error:
             steps[index].close()
             if on_error is not None:
-                on_error(index, error)
+                with guard:
+                    on_error(index, error)
+        else:
+            with guard:
+                pending[index] = result
 
-    for index, generator in enumerate(steps):
-        advance(index, lambda g=generator: next(g))
+    def advance_all(work: list[tuple[int, Callable[[], list[Message]]]]) -> None:
+        """Advance a round's trajectories at once.
+
+        D21 accepted the barrier and asked for it to be measured before being
+        replaced. Measured on a 24-wide round: eight of fifteen `nvidia-smi
+        dmon` samples show `sm 0%` and 124 W against 348 W while generating —
+        close to half the wall clock is the card waiting for twenty-four
+        `docker exec` calls to run one after another.
+
+        The generation half of the round still has its barrier; this removes
+        only the sandbox half, which is I/O and overlaps freely.
+        """
+        if len(work) <= 1:
+            for index, pump in work:
+                advance(index, pump)
+            return
+        with ThreadPoolExecutor(max_workers=len(work)) as pool:
+            list(pool.map(lambda item: advance(*item), work))
+
+    advance_all([(index, lambda g=generator: next(g)) for index, generator in enumerate(steps)])
 
     while pending:
         live = list(pending)
         generations = model.generate_batch([pending[index] for index in live])
         pending = {}
-        for index, generation in zip(live, generations, strict=True):
-            advance(index, lambda i=index, g=generation: steps[i].send(g))
+        advance_all(
+            [
+                (index, lambda i=index, g=generation: steps[i].send(g))
+                for index, generation in zip(live, generations, strict=True)
+            ]
+        )
 
     return [finished.get(index) for index in range(len(steps))]
 
