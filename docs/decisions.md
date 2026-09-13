@@ -1318,6 +1318,66 @@ separates the two things the probe could have learned. If trajectories under
 pressure that did not cross score like the crossings, the probe reads task
 pressure rather than intent.
 
+### Throughput, measured rather than assumed
+
+D21 chose vLLM on a measurement and closed with an instruction this session
+ignored: *measure the barrier before paying for it.* The barrier was paid for
+first — a 24-wide batch launched without knowing what a lock-step round costs
+when generation lengths vary by 20×. What follows is the measurement, late.
+
+| | D21 (the ablation) | this session |
+|---|---|---|
+| model | Qwen3-Coder-30B-A3B — 3B active | Qwen3.8-27B — **dense** |
+| card | 4×RTX A6000 48 GB | 1×H100 PCIe 80 GB |
+| backend | `transformers`, serial | vLLM 0.29, **eager** |
+| decode | 16 tok/s | 19 tok/s |
+| GPU utilisation | 34%, flat | 52–100%, sawtooth |
+| engine CPU | — | 86%, 23 of 26.5 minutes |
+
+**Nineteen against sixteen is not a small gain, it is a large one cancelled.**
+The ablation ran a 3B-active MoE through a serial HuggingFace loop on a
+consumer card; this runs a 27B dense model through vLLM on an H100 and lands in
+the same place. Two things eat the difference, and both are forced:
+
+* **Dense reads nine times the weights per token.** Decode is
+  memory-bandwidth-bound — D21's own argument — and a dense 27B moves 27B of
+  parameters for every token where a 30B-A3B moves about 3B. The descent picked
+  this model *because* it is dense (extraction from a MoE means handling expert
+  routing), so the cost was bought deliberately.
+* **`enforce_eager` removes CUDA graphs.** The sawtooth in GPU utilisation is
+  what that looks like: each operator is launched separately and the card idles
+  between launches. With capture on it would be roughly 40–50 tok/s.
+
+**The capture is not optional, and finding that out was the expensive part.**
+Qwen3.8-27B dies in `profile_cudagraph_memory` with
+`torch_call_dispatcher("aten::new_empty") API call failed at
+torch/csrc/stable/ops.h`. A stack dump of the engine puts it in
+`vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py` — the gated delta
+net behind 48 of the model's 64 layers, whose custom ops go through torch's
+stable ABI. Switching the attention backend does not help: `FLASH_ATTN` and
+`TRITON_ATTN` fail identically, because the problem is the capture and not
+attention.
+
+**The lock-step barrier is the dominant term, and it is a variance tax.**
+`drive_batch` advances every trajectory one step per round, so a round costs the
+*slowest* generation in it, not the mean. Measured single-stream step lengths
+run from about 100 tokens to the full 2048-token cap — a 20× spread — and one
+trajectory thinking hard holds up 23 others. The alternative D21 names, one
+thread per trajectory against an async engine, is not reachable from here: vLLM's
+synchronous `LLM.generate` serialises under threads, so `drive_threaded` (which
+`APIModel` uses to good effect) would buy nothing without moving to the async
+engine.
+
+<!-- TODO: fill in when the first batch of 24 lands — seconds per round,
+     mean-to-max ratio within a round, and what the barrier actually costs
+     against the same work driven one trajectory at a time. -->
+
+**What this implies for the next architecture.** Both of this session's
+throughput surprises came from the model being new rather than from the harness:
+the capture failure and the dense-vs-MoE bandwidth cost. Neither is visible
+before the weights are on a card, which is the argument for a smoke run that
+generates rather than one that only loads.
+
 ### What the first card cost, and what it bought
 
 Four failures, none of which any test could have caught, all of which surfaced

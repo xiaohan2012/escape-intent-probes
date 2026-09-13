@@ -177,3 +177,65 @@ are in `scripts/bench_batch.py`.
 **35–40 s per trajectory** at 25 steps, against 216 s on the HuggingFace path.
 Of that round, the first ~2.5 minutes used to be serial container setup with
 the GPU at zero — `--setup-workers` now threads it.
+
+## Lambda 1×H100 80 GB PCIe, Lambda Stack 24.04 (2026-09-13)
+
+Ninety seconds to a working box, against the ~7 minutes the A6000 bootstrap
+took, almost all of it network:
+
+| step | time |
+|---|---|
+| `uv` install | 3 s |
+| clone + `uv sync --group model --group tasks` | 5 s |
+| vLLM venv (`vllm` + `ninja` + editable install) | 12 s |
+| **Qwen3.8-27B weights, 52 GB, 32 files** | **28 s** |
+| 12 SWE-bench x86_64 images, pulled concurrently | 160 s |
+| **total** (downloads overlap everything else) | **~90 s** |
+
+Weights at roughly 1.9 GB/s. Both fetches run in the background while the
+environments install, so the wall clock is the slower of the two.
+
+**Check `torch.cuda.is_available()` before installing anything.** The first
+instance rented was the *SXM5* variant of the same card, and it passed every
+obvious preflight — `nvidia-smi` reported `NVIDIA H100 80GB HBM3` and Docker
+worked — while CUDA did not run at all:
+
+```
+CUDA error 802: system not yet initialized
+$ nvidia-smi -q | grep -A2 Fabric
+    Fabric
+        State : In Progress
+```
+
+H100 SXM5 sits on an HGX baseboard behind NVSwitch, and CUDA waits for fabric
+state before it will initialise. `nvidia-fabricmanager` cannot supply it inside
+a single-GPU VM — `request to query NVSwitch device information from NVSwitch
+driver failed with error: WARNING Nothing to do` — so the wait never ends.
+Neither a reboot nor `FABRIC_MODE=1` in `fabricmanager.cfg` changed it.
+
+The **PCIe** variant has no NVSwitch, reports `Fabric State: N/A`, and worked
+immediately. It is also $1/hr cheaper. The SXM5 was chosen for memory bandwidth
+— 3.35 against 2 TB/s, which matters because a rollout batch is decode-bound —
+and that reasoning was sound in isolation and still cost 30 minutes and $2.20.
+`nvidia-smi` succeeding means the driver is loaded, not that CUDA can run.
+
+**Free the card before every batch.** vLLM's engine core does not reliably exit
+with the batch, and it renames itself to `VLLM::EngineCore` — so a kill pattern
+built from the interpreter path misses exactly the process that matters. Three
+consecutive runs died on
+
+```
+ValueError: Free memory on device cuda:0 (6.83/79.18 GiB) on startup is less
+than desired GPU memory utilization (0.9, 71.26 GiB)
+```
+
+which is also what a card too small for the model reports, so the two are
+indistinguishable from the log. `scripts/run_on_box.sh` asks the driver who
+holds the card instead:
+
+```bash
+nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -r kill -9
+```
+
+**`enforce_eager` is on by default** (D24): Qwen3.8-27B cannot survive CUDA
+graph capture, and the failure names neither the model nor the graph.
