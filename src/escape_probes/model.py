@@ -39,11 +39,50 @@ class ParsedCall:
     """Character offset of the first argument's value — probe position (b)."""
 
 
+THINK_CLOSE = "</think>"
+THINK_OPEN = "<think>"
+
+
+def split_reasoning(text: str) -> tuple[str, str]:
+    """A reasoning model's emission, split into its think block and its answer.
+
+    Qwen3.8-27B ends its generation prompt with `<think>\n`, so the model writes
+    its reasoning first and closes the block itself. Its template renders a
+    *past* assistant turn from a separate `reasoning_content` field:
+
+        '<|im_start|>assistant\n<think>\n' + reasoning_content
+            + '\n</think>\n\n' + content
+
+    Store the whole emission as `content` and the re-render produces an empty
+    think block with the reasoning as prose — so step 1's prompt stops being a
+    prefix of step 0's, and Pass 2 would replay a sequence the model never saw.
+    `add_step` catches it, which is what E4 is for, but catching it only turns a
+    silent corruption into a stopped batch.
+
+    Both halves are trimmed because the template trims the reasoning and supplies
+    the surrounding newlines itself; anything else fails to round-trip.
+
+    Text with no closing tag is all content, which is the non-reasoning case and
+    must stay untouched.
+    """
+    head, tag, tail = text.partition(THINK_CLOSE)
+    if not tag:
+        return "", text.strip()
+    return head.removeprefix(THINK_OPEN).strip(), tail.strip()
+
+
 class Message(BaseModel):
     """One turn of the conversation handed to the model."""
 
     role: str
     content: str
+
+    reasoning_content: str | None = None
+    """The think block, for templates that render it from its own field.
+
+    `None` rather than `""` so a template asking `reasoning_content is string`
+    treats an ordinary message as having no reasoning rather than an empty
+    block — the two render differently, and the difference breaks nesting."""
 
 
 class Generation(BaseModel):
