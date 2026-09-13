@@ -11,3 +11,4 @@ embeddings/
 .ruff_cache/
 .pytest_cache/
 *.egg-info/
+.claude/worktrees/
