@@ -43,7 +43,8 @@ class TestStandardise:
         # which at n=60 is enough to move the answer.
         train = np.array([[0.0], [2.0]])
         centre, scale = standardise(train)
-        assert (np.array([[4.0]]) - centre) / scale == pytest.approx([[3.0]])
+        held_out = (np.array([[4.0]]) - centre) / scale
+        assert float(held_out[0, 0]) == pytest.approx(3.0)
 
 
 class TestLinearProbe:
@@ -72,10 +73,17 @@ class TestLinearProbe:
 
     def test_class_weighting_rescues_a_rare_positive(self) -> None:
         # 1:9 is R2's actual ratio. Unweighted, "never" scores 90%.
+        # Overlapping classes, because weighting changes nothing when a
+        # boundary exists that separates them anyway — and the real data
+        # overlaps: R2's positives are steps of the same conversations whose
+        # earlier steps are not positives.
         rng = np.random.default_rng(1)
-        x = np.concatenate([rng.normal(2.0, 1.0, (20, 3)), rng.normal(0.0, 1.0, (180, 3))])
+        x = np.concatenate([rng.normal(0.6, 1.0, (20, 3)), rng.normal(0.0, 1.0, (180, 3))])
         y = np.array([1] * 20 + [0] * 180)
-        recall = lambda p: (p.score(x)[:20] >= 0.5).mean()  # noqa: E731
+
+        def recall(probe: LinearProbe) -> float:
+            return float((probe.score(x)[:20] >= 0.5).mean())
+
         assert recall(LinearProbe(l2=1.0, balanced=True).fit(x, y)) > recall(
             LinearProbe(l2=1.0, balanced=False).fit(x, y)
         )

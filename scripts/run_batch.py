@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import time
 from collections import Counter
@@ -139,6 +140,12 @@ def main() -> int:
     args = parser.parse_args()
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    # vLLM forks its engine core, and by then something in this process has
+    # already initialised CUDA — torch cannot re-initialise it across a fork, and
+    # the failure is a wall of engine-core traceback that says nothing about the
+    # rollout. Set before any vLLM import so the engine picks it up.
+    os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 
     if args.config is not None:
         # The config wins, and says so by overwriting the flags rather than
