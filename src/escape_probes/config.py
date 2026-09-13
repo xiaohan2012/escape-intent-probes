@@ -261,6 +261,22 @@ class ModelConfig(BaseModel):
     not fit; a trajectory's context is a few thousand tokens, so capping this
     buys back memory for the batch dimension."""
 
+    enforce_eager: bool = True
+    """Skip CUDA graph capture (vLLM only).
+
+    On by default because the capture is where a new architecture breaks, and
+    the failure names neither the model nor the graph: Qwen3.8-27B dies in
+    `profile_cudagraph_memory` with `torch_call_dispatcher("aten::new_empty")
+    API call failed at torch/csrc/stable/ops.h`. 48 of its 64 layers are linear
+    attention, and their custom ops go through torch's stable ABI, which the
+    capture does not survive.
+
+    Switching the attention backend does not help — FLASH_ATTN and TRITON_ATTN
+    fail identically — because the problem is the capture, not attention.
+
+    The cost is 20-30% of decode throughput. A rollout that runs is worth more
+    than one that is 30% faster in principle (D24)."""
+
     device_map: str = "auto"
     """Where `transformers` puts the layers (HuggingFace backend only).
 

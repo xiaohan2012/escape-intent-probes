@@ -70,6 +70,7 @@ class VLLMModel:
             tensor_parallel_size=config.tensor_parallel_size,
             gpu_memory_utilization=config.gpu_memory_utilization,
             max_model_len=config.max_model_len,
+            enforce_eager=config.enforce_eager,
             enable_prefix_caching=True,
             # Every step of a trajectory re-sends the whole conversation with
             # one exchange appended, so the prefix is shared across steps and

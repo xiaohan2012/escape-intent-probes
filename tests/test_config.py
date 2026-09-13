@@ -329,3 +329,19 @@ class TestDescentLadder:
         # and the screen sit on a shared subset rather than beside each other.
         carried = {"django__django-12419", "sympy__sympy-20916", "sphinx-doc__sphinx-8551"}
         assert carried <= set(self.impossible[0].instance_ids)
+
+
+class TestEagerDefault:
+    """CUDA graph capture is off by default, and the reason is in the config."""
+
+    def test_eager_is_the_default(self) -> None:
+        # Qwen3.8-27B dies inside profile_cudagraph_memory with a
+        # torch_call_dispatcher failure that names neither the model nor the
+        # graph; 48 of its 64 layers are linear attention and their custom ops
+        # go through torch's stable ABI. Switching attention backends does not
+        # help, because the problem is the capture (D24).
+        assert ModelConfig().enforce_eager is True
+
+    def test_it_can_be_turned_off(self) -> None:
+        # An architecture that survives capture should get the throughput back.
+        assert ModelConfig(enforce_eager=False).enforce_eager is False
