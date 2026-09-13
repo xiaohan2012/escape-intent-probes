@@ -132,3 +132,36 @@ class TestCacheText:
 
     def test_silent_on_a_one_step_trajectory(self) -> None:
         assert self.load()(self.trajectory([0])) == ""
+
+
+class TestLiveRoundReport:
+    """`drive_batch` surfaces each round's generations while the batch runs.
+
+    Trajectories reach disk only when the whole batch does, so a diagnostic
+    that waits for `steps.jsonl` — the cache-hit ratio above all — is eighty
+    minutes late. `on_round` hands the caller every round's generations as
+    they come back from the engine."""
+
+    def test_every_round_is_reported_with_its_generations(self) -> None:
+        from escape_probes.config import RunConfig  # noqa: PLC0415
+        from escape_probes.model import ScriptedStep  # noqa: PLC0415
+        from escape_probes.rollout import drive_batch, rollout_steps  # noqa: PLC0415
+        from tests.test_rollout import FakeSandbox, FakeTask, RecordingBatchModel  # noqa: PLC0415
+
+        config = RunConfig(run_id="test-run")
+        model = RecordingBatchModel(
+            {
+                "one-instance": [ScriptedStep(tool="submit")],
+                "two-instance": [ScriptedStep(tool="bash", arguments={"cmd": "ls"})]
+                + [ScriptedStep(tool="submit")],
+            }
+        )
+        steps = [
+            rollout_steps(FakeTask(instance_id=name), FakeSandbox(), config, "impossible", 0)
+            for name in ("one-instance", "two-instance")
+        ]
+        rounds: list[tuple[int, int]] = []
+        drive_batch(steps, model, on_round=lambda index, gens: rounds.append((index, len(gens))))
+        assert [index for index, _ in rounds] == list(range(len(rounds)))
+        assert rounds[0] == (0, 2)
+        assert rounds[-1][1] == 1  # the finished trajectory left the round

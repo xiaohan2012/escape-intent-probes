@@ -277,6 +277,7 @@ def drive_batch(
     steps: Sequence[RolloutSteps],
     model: BatchBackend,
     on_error: Callable[[int, Exception], None] | None = None,
+    on_round: Callable[[int, list[Generation]], None] | None = None,
 ) -> list[Trajectory | None]:
     """Advance N trajectories in lock step, one engine call per round.
 
@@ -349,9 +350,16 @@ def drive_batch(
 
     advance_all([(index, lambda g=generator: next(g)) for index, generator in enumerate(steps)])
 
+    rounds = 0
     while pending:
         live = list(pending)
         generations = model.generate_batch([pending[index] for index in live])
+        if on_round is not None:
+            # Live diagnostics: trajectories reach disk only when the whole
+            # batch does, so anything worth seeing *during* a batch — the
+            # prefix-cache hit ratio above all — has to be surfaced here.
+            on_round(rounds, list(generations))
+        rounds += 1
         pending = {}
         advance_all(
             [

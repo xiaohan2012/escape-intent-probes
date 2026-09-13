@@ -290,6 +290,24 @@ def main() -> int:
                 instance, condition, seed = opened[index][0]
                 print(f"  {instance} {condition} {seed}: FAILED {error}", flush=True)
 
+            def report_round(round_index: int, generations) -> None:  # noqa: ANN001
+                """The prefix-cache diagnostic, live rather than at batch end.
+
+                From round 1 every prompt is the previous one plus a suffix, so
+                the reused fraction should be near its block-granular ceiling.
+                Near zero is the finding (vLLM #45238, or KV-pool eviction) and
+                should be visible mid-batch, not eighty minutes later.
+                """
+                reused = sum(g.cached_tokens for g in generations if g.cached_tokens > 0)
+                prompt = sum(len(g.prompt_token_ids) for g in generations)
+                known = all(g.cached_tokens >= 0 for g in generations)
+                if round_index and prompt and known:
+                    print(
+                        f"  -- round {round_index}: cache {reused / prompt:.0%} "
+                        f"({reused}/{prompt} prompt tokens reused)",
+                        flush=True,
+                    )
+
             # Which driver, asked of the backend rather than re-derived from
             # the config: `config.backend` is switched on once already, where
             # the model is built, and answering the same question twice is two
@@ -300,7 +318,9 @@ def main() -> int:
                 )
             else:
                 batched = model if hasattr(model, "generate_batch") else SerialBatch(model)
-                trajectories = drive_batch(steps, batched, on_error=report_error)
+                trajectories = drive_batch(
+                    steps, batched, on_error=report_error, on_round=report_round
+                )
 
         group_seconds = time.monotonic() - group_started
         for (instance, condition, seed), trajectory in zip(
