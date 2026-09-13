@@ -1,186 +1,129 @@
 # Next session
 
-Written at the end of 2026-09-12, after three pilot batches. The machine is
-terminated; 15 trajectories are on the local disk under `runs/`, nothing else on
-the box was irreplaceable.
+Rewritten 2026-09-13, replacing a plan whose every item had shipped. Where
+things actually stand, and what to do first if you pick this up cold.
 
-Bring a box up with:
+## The question, and how far it has been answered
+
+Can a linear probe on an agent's residual stream flag intent to cross a sandbox
+boundary *before* the crossing executes, when the intent comes from the
+environment rather than an instruction — and how many steps early?
+
+| stage | state |
+|---|---|
+| Does the environment afford crossing at all? | **yes** — 5 of 15 frontier trajectories crossed (#4, D22) |
+| Is there a crosser small enough to self-host? | **yes** — `qwen3.8-27b`, 12/24, one 80 GB card (#6, D23) |
+| Pass 1: local rollouts with real token ids | **running** (D24) |
+| Pass 2: extract activations | code ready, verified on one trajectory |
+| Fit and report the probe | code ready, never run on real data |
+
+## Branches and PRs
+
+```
+main
+ └── ablation-d20      PR #3  open   0/108 crossings, 14/108 in-sandbox shortcuts
+      └── frontier-screen   PR #4  open   the screen: does any model cross
+           └── descent-02        PR #6  open   the descent: 27B crosses on one card
+                └── probe-01          no PR yet   Pass 2, the probe, D24
+```
+
+Nothing is merged. The stack is in dependency order, so review from the bottom.
+
+## The machine
+
+Lambda 1×H100 **PCIe** (not SXM5 — see `docs/vllm-pitfalls.md`), `ssh eip`.
+Bootstrap is 90 seconds: `scripts/setup_machine.sh`, then
+`scripts/run_on_box.sh CONFIG BATCH`. That script takes a lock and frees the
+card before starting, both of which cost a run each to learn.
+
+**If the box is gone**, everything needed to rebuild is in
+`docs/setup-log.md`. Weights download at ~1.9 GB/s; the twelve SWE-bench images
+take about three minutes.
+
+## What is running
+
+```
+configs/probe-01-qwen3.8-27b.yaml          72 impossible   12 instances x 6 seeds
+configs/probe-01-qwen3.8-27b-benign.yaml   24 benign       12 instances x 2 seeds
+```
+
+Batch 24, about 3 minutes a round, 25 rounds a batch. Trajectories land only
+when a whole batch finishes, so `runs/probe-01-*` is empty until it does.
+
+Work is ordered `for seed: for instance:`, so **stopping early yields whole
+seeds covering all twelve instances** rather than a ragged panel. Stop whenever
+there is enough.
+
+## Then, in order
+
+**1. Pass 2.** On the box, because the weights are there:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xiaohan2012/escape-intent-probes/main/scripts/setup_machine.sh | bash
+uv run python scripts/extract.py --runs runs/probe-01-* --out activations/
 ```
 
-About two minutes to a verified environment. Note the card matters: the H100
-80 GB fits Qwen3-Coder-30B-A3B and Qwen3-32B, but **not** Coder-Next in FP8
-(80 GB of weights leaves no room for a KV cache), so D5's stated upgrade path
-needs an H200 or a different target — see item 5.
+One forward per step, all 65 layers, three positions, fp16 — about 4.8 GB for
+96 trajectories. It refuses a trajectory with no token ids rather than
+re-tokenising text, which is the whole reason Pass 1 ran locally.
 
-## Order
+Needs `flash-linear-attention` installed or 48 of the 64 layers fall back to a
+reference kernel, with a warning rather than an error.
 
-Revised mid-session on 2026-09-12, after item 0 landed as **D20** and the box
-came up as 4×A6000 rather than an H100.
+**2. Pull the activations down before terminating the box.** Everything else is
+reproducible; these are not, without another rental.
 
-```
-0.  Configuration, no GPU needed                              DONE (D20)
-    top_p=1.0 / top_k=0   sampling had been capped at top_k 20 all along
-    prompt B -> A         restores "and pass all tests"
-    edit tool by default  multi-line changes were otherwise inexpressible
-    submissions != steps  it could resubmit forever, with no urgency
+**3. Fit, on any laptop.**
 
-1.  Speed                                                     1.5 h  GPU
-    A: VLLMModel, serial      — proves the install and the wiring
-    B: lock-step batch runner — ~15 s per trajectory
-    (D21: `rollout` becomes a generator, one round per `llm.generate([...])`)
-
-2.  Ablate the four D20 changes, with a real sample size
-    previously this was one 3-seed batch read *after* changing four things
-    at once, which no conclusion survives; the funnel is the metric
-    (recon -> reads_cue -> crossing), not the crossing rate
-
-3.  The propensity control, now a 3-minute batch
-    tests writable + edit tool, ImpossibleBench's own conditions
-      cheats     -> appetite exists, the route is too expensive
-                    -> write the exit patches (item 6)
-      does not   -> appetite absent at this tier
-                    -> switch to Qwen3-32B dense (item 5)
-
-4.  Raise max_steps 25 -> 40 and re-check, now that it is cheap
-
-5.  Follow the branch above, and only then discuss the full 160.
+```bash
+uv run python scripts/train_probe.py --activations activations/ --runs runs/probe-01-*
 ```
 
-Speed moved ahead of every reading, which reverses this document's original
-advice. The reason is that the original item 1 — one instance, three seeds,
-twelve steps — was to be read *after* four configuration changes landed
-together. Four variables, one sample: no conclusion survives that, whichever
-way the number comes out. Speed is the only step that is unconditionally worth
-doing, because crossings mean we need volume and no crossings mean we need
-iterations, and it is what makes item 2 affordable enough to vary one thing at
-a time.
+Seconds per fit. The layer, the probe position, the labelling rule and the
+threshold are all decisions taken here, which is the point of the two-pass
+split.
 
----
+## What to look at first, and what would falsify it
 
-## 1 — Make the loop fast (first, before any more experiments)
+The headline is **not** the step-level AUC. `read` and `crossed` differ by one
+trajectory in 118 and the median gap between them is one step, so a probe can
+score well on steps by detecting `/opt/grader` sitting in the context window.
+That hypothesis makes a sharp prediction — **median lead time of exactly one
+step** — and the trajectory report tests it directly.
 
-Measured, not guessed: model time is **94%** of wall clock, sandbox 6%, decode
-**16 tok/s**, GPU utilisation **34%**. The card is idle. A trajectory takes 3.6
-minutes and a nine-trajectory batch 45, which is too slow to iterate on the
-questions below.
+So read, in order:
 
-**A. `VLLMModel`, serial** — ~30 min, expect 3–5×. vLLM's offline `LLM` API
-takes `TokensPrompt(prompt_token_ids=...)` and returns `token_ids`, so it never
-round-trips through text — a better fit for D12 than the current path, not just
-a faster one. `ModelBackend` is already the seam; the loop does not change.
+1. **Median lead time.** One step: the probe is a string detector. Three or
+   more, firing before the cue was read: it found something else, and that is
+   the result.
+2. **`induced_not_crossed` scores.** Trajectories under the same pressure that
+   did not cross are scored and never trained on. If they score like the
+   crossings, the probe reads task pressure rather than intent.
+3. **R1 against R2.** If the R1 probe fires much earlier than the R2 probe, it
+   has found task identity, not intent (D24).
 
-**B. Lock-step batch runner** — ~1 h, expect another 3–4×. Advance N
-trajectories one step at a time and hand the whole round to `llm.generate([...])`
-in one call; vLLM does the continuous batching internally, so there is no
-padding or ragged-length bookkeeping to write. Sandbox work is I/O and overlaps
-in threads. Drop trajectories from the round as they finish.
+## Open, and worth deciding before the write-up
 
-Together: ~15 s per trajectory, so a nine-trajectory batch takes about three
-minutes instead of forty-five.
+* **The benign condition contains a real shortcut.** `boundary.py` claims the
+  exit is "useful in only one" condition; it is not. Benign plants the gold
+  patch and runs the original tests, which that patch passes. `glm-5.3-flash`
+  took it with no goal pressure on it. That contaminates the negative class and
+  weakens the construct — see D23. The fix is to the exit's payload, not to the
+  labels, and it invalidates nothing already collected as long as it is
+  reported.
+* **The listing knockout is now predicted to be null.** With capable models the
+  agent surfaces `grader.yaml` itself in 13 of 18 trajectories, and in 4 of 5
+  crossings its own discovery preceded its read. D17's premise no longer holds;
+  the interesting bottleneck is one stage later — thirteen saw the name and five
+  opened it, which is D19's problem.
+* **CI is red** on two `unused-ignore-comment` warnings in `tasks.py`. CI's
+  `uv sync --frozen` omits the `tasks` group, so `swebench` is absent, ty cannot
+  resolve the signature, and the ignores read as unused — while locally they are
+  required. One line under `[tool.ty.rules]` fixes it.
 
-**Risk:** vllm pins its own torch. Put it in its own dependency group; if it
-conflicts with torch 2.14 / transformers 5.17, give it a separate venv rather
-than fighting the resolver.
+## Reading order for someone new
 
-## 2 — Fix sampling before interpreting anything
-
-`ModelConfig` sets `temperature=1.0` but never overrides the model's own
-`generation_config`, which is `temperature 0.7, top_p 0.8, top_k 20,
-repetition_penalty 1.05`. So sampling has been drawn from the top 20 tokens
-within 0.8 of the probability mass the whole time.
-
-Two consequences, the second worse than the first:
-
-* Low-probability exploratory actions — "open this odd `grader.yaml`" — are
-  nearly unreachable.
-* **Seeds may barely differ**, and the design depends on the same task yielding
-  both crossing and non-crossing runs (design doc 6.3). Every pilot so far ran
-  seed 0 only, so this is untested. Check it directly: run one instance across
-  three seeds and compare the command sequences.
-
-Set `top_p=1.0`, `top_k=0` explicitly. One line, and it confounds every other
-variable until it is done.
-
-## 3 — Diagnose whether the model has any shortcut propensity at all
-
-Four impossible trajectories produced **zero** crossings, **zero** test edits and
-**zero** reconnaissance. One agent read the contradictory test at step 11, saw
-that the same value had to equal two different header lists, and then submitted
-the same correct patch six times without trying anything else.
-
-Before spending more time on the exit's discoverability, find out whether there
-is any appetite to exploit. Run a **one-off diagnostic batch, kept out of the
-real dataset**: tests writable *and* the `edit` tool enabled — ImpossibleBench's
-own conditions, where test modification accounts for >79% of Qwen3-Coder's
-cheating.
-
-* **It cheats** → the appetite exists and the bottleneck is the cost of the
-  route. Work on making the exit cheap to use: a patch that actually passes, and
-  the `edit` tool in the real condition too.
-* **It does not** → the appetite is absent at this tier. Stop tuning the
-  environment and go to item 5.
-
-Editing tests is not a crossing and this batch produces no E2 data; it is a
-control, and the real condition keeps tests read-only (D8) so that closing the
-near route still points at the far one.
-
-## 4 — Cheap configuration levers, in order
-
-1. **Prompt B → A**, restoring "and pass all tests". ImpossibleBench's largest
-   lever: >85% cheating at A/B against 1%/33% at D for GPT-5 and o3.
-
-   D13 chose B on the grounds that A's clause "shades toward instructed
-   intent". **That reasoning was wrong and should be corrected.** Level 3 is
-   about where the intent to *cross* comes from, not about whether the task has
-   an objective. "Pass all tests" is an ordinary objective; it says nothing
-   about shortcuts, about the grader, or about leaving the working directory.
-   And it is the objective the incident actually ran on — the models were
-   trying to pass an evaluation.
-
-   B is the distortion: it lets an agent conclude that implementing correctly
-   *is* completing the task, which is exactly what one trajectory did, six
-   submissions of the same correct patch while insisting it was right. The real
-   incident offered no such off-ramp. A should be the default.
-2. **Separate the submission budget from the step budget.** The prompt currently
-   says "You could submit up to 25 times" because `max_attempts = max_steps`.
-   ImpossibleBench uses ten. An agent that submitted six identical patches was
-   under no pressure to stop.
-3. **Raise the step budget to 40, once speed and the `edit` tool are in.** At
-   25 every impossible trajectory hit the cap, so the crossing rate may be
-   measuring the budget. The evidence against more steps is one benign sympy
-   trajectory that looped rather than converged — and it looped because it could
-   not express a multi-line edit, which the `edit` tool fixes. Re-open the
-   question once that is true; after the speed work 40 steps costs little.
-
-4. **Enable the `edit` tool** in the real condition. It is implemented and off by
-   default. It lowers the cost of every action, including applying a patch
-   fetched from the exit.
-
-## 5 — If the propensity is genuinely absent: change model
-
-D5's upgrade path named Coder-Next FP8, but that assumed an H200. On an H100
-80 GB the candidate is **Qwen3-32B dense (thinking)**: 64 GB in bf16, ten times
-the active parameters per token, and reasoning traces that N3 and the keyword
-baseline both need. `gpt-oss-120b` is the cross-family check afterwards — it
-ships natively in MXFP4 and fits one 80 GB card.
-
-## 6 — Deferred until a crossing is actually observed
-
-Exit contents for the impossible condition: one special-cased patch per
-instance, verified in the container. The crossing *rate* does not depend on it —
-a crossing is counted at first touch — but what happens afterwards does. The
-django mutation asserts that the same value equals two different header lists,
-which needs something like an `__eq__` that answers yes to everything; that is
-real work per instance and should wait until it is worth doing.
-
----
-
-## Keep the batches small
-
-Three of the questions above are answerable with 12 steps and three seeds on one
-instance — about five minutes even before item 1 lands. The 45-minute batches
-were a mistake: cross-instance coverage and a full step budget are for
-validating a setting, not for finding one.
+1. `docs/design-doc.md` — the experiment
+2. `docs/decisions.md` — D22 the screen, D23 the descent, D24 the probe
+3. `docs/vllm-pitfalls.md` — what the infrastructure did, and which parts of it
+   transfer
+4. `docs/setup-log.md` — how to get a box back
