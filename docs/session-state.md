@@ -31,15 +31,14 @@ Scripts that exist only on the box, in `/tmp`:
 Useful one-liners:
 
 ```bash
-# progress
-ssh eip 'n=$(strings /tmp/full.log | grep -c "Rendering prompts: 100%"); \
-  echo "round $((n/3))/25  saved $(ls ~/eip/runs/probe-01-qwen3.8-27b | wc -l)/72"'
-
-# per-round durations
-ssh eip 'strings /tmp/full.log | grep -oE "24/24 \[[0-9]+:[0-9]+<" | awk "!seen[\$0]++" | tail'
+# progress and recent round durations — validated against batch 1's known 25
+ssh eip '/tmp/progress.sh'
 
 # is the card actually working (utilisation lies; power does not)
 ssh eip 'nvidia-smi dmon -s pu -c 8'
+
+# the only timings that matched ground truth today
+ssh eip 'cd ~/eip && python3 /tmp/steptime.py'
 ```
 
 ## What is running
