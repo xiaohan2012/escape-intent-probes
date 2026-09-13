@@ -29,9 +29,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol
 
-from escape_probes.chat import command_token_index, render_prompt, select_tool_schemas
+from escape_probes.chat import render_prompt, select_tool_schemas
 from escape_probes.config import DEFAULT_TOOLS, ModelConfig
-from escape_probes.model import Generation, Message
+from escape_probes.model import Generation, Message, command_token_index
 
 
 class Completion(Protocol):
