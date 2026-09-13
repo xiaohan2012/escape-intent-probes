@@ -16,6 +16,10 @@ The engine knows and says so — `RequestOutput.num_cached_tokens` — and this
 backend discarded it, so a run had no way to tell a working cache from a broken
 one. That is the same shape as every other failure this week: not wrong, just
 invisible.
+
+The count is kept per request and lands on each `Step`, because the diagnostic
+is the ratio against that step's `prompt_span` — a round total would make the
+ratio unreadable in `steps.jsonl`.
 """
 
 from __future__ import annotations
@@ -37,29 +41,29 @@ class FakeOutput:
 
 
 class TestCachedPromptTokens:
-    def read(self, outputs: list[FakeOutput]) -> int:
+    def read(self, outputs: list[FakeOutput]) -> list[int]:
         from escape_probes.vllm_backend import cached_prompt_tokens  # noqa: PLC0415
 
         return cached_prompt_tokens(outputs)
 
-    def test_it_sums_across_the_round(self) -> None:
-        assert self.read([FakeOutput(100), FakeOutput(250)]) == 350
+    def test_one_count_per_request(self) -> None:
+        assert self.read([FakeOutput(100), FakeOutput(250)]) == [100, 250]
 
     def test_a_cold_round_reads_zero(self) -> None:
         # The signal we are looking for. Zero on round 2 and later means the
         # reconciliation collapsed, not that the cache is warming up.
-        assert self.read([FakeOutput(0), FakeOutput(0)]) == 0
+        assert self.read([FakeOutput(0), FakeOutput(0)]) == [0, 0]
 
     def test_an_engine_that_does_not_report_it_is_not_an_error(self) -> None:
         # Older vLLM, or a backend that does not carry the attribute. Absent
         # must not crash a rollout, and must not read as zero either.
-        assert self.read([FakeOutput(None)]) == -1
+        assert self.read([FakeOutput(None)]) == [-1]
 
     def test_mixed_reporting_is_treated_as_absent(self) -> None:
-        assert self.read([FakeOutput(10), FakeOutput(None)]) == -1
+        assert self.read([FakeOutput(10), FakeOutput(None)]) == [-1, -1]
 
     def test_no_outputs(self) -> None:
-        assert self.read([]) == -1
+        assert self.read([]) == []
 
 
 class TestGenerationCarriesIt:
@@ -67,3 +71,64 @@ class TestGenerationCarriesIt:
         # -1 rather than 0: "the engine did not say" and "the engine said none"
         # are different findings, and only one of them is a bug.
         assert Generation(prompt_token_ids=(1,), gen_token_ids=(2,), text="x").cached_tokens == -1
+
+
+class TestStepCarriesIt:
+    def make(self, cached: int) -> Generation:
+        return Generation(
+            prompt_token_ids=(1, 2, 3), gen_token_ids=(4,), text="x", cached_tokens=cached
+        )
+
+    def test_add_step_records_it(self) -> None:
+        from escape_probes.trace import TrajectoryWriter  # noqa: PLC0415
+
+        writer = TrajectoryWriter()
+        step = writer.add_step(self.make(2))
+        assert step.cached_tokens == 2
+
+    def test_default_is_unknown_for_old_trajectories(self) -> None:
+        from escape_probes.trace import Step  # noqa: PLC0415
+
+        assert Step(step_idx=0, prompt_span=(0, 3), gen_span=(3, 4)).cached_tokens == -1
+
+
+class TestCacheText:
+    def load(self):  # noqa: ANN201
+        import sys  # noqa: PLC0415
+        from pathlib import Path  # noqa: PLC0415
+
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+        from run_batch import cache_text  # noqa: PLC0415
+
+        return cache_text
+
+    def trajectory(self, cached: list[int]):  # noqa: ANN201
+        from escape_probes.trace import TrajectoryWriter  # noqa: PLC0415
+
+        writer = TrajectoryWriter()
+        prompt: tuple[int, ...] = ()
+        for count in cached:
+            prompt = prompt + (1, 1, 1, 1)
+            writer.add_step(
+                Generation(
+                    prompt_token_ids=prompt, gen_token_ids=(2,), text="x", cached_tokens=count
+                )
+            )
+
+        class Holder:
+            steps = writer.steps
+
+        return Holder()
+
+    def test_ratio_over_steps_after_the_first(self) -> None:
+        # Steps 1 and 2 have prompts of 8 and 12 tokens; 8 + 12 = 20, all hit.
+        assert self.load()(self.trajectory([0, 8, 12])) == " cache=100%"
+
+    def test_the_broken_cache_reads_zero(self) -> None:
+        assert self.load()(self.trajectory([0, 0, 0])) == " cache=0%"
+
+    def test_silent_when_the_backend_did_not_report(self) -> None:
+        assert self.load()(self.trajectory([-1, -1])) == ""
+
+    def test_silent_on_a_one_step_trajectory(self) -> None:
+        assert self.load()(self.trajectory([0])) == ""

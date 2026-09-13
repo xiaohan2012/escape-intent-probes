@@ -52,8 +52,13 @@ class Completion(Protocol):
     text: str
 
 
-def cached_prompt_tokens(outputs: Sequence[Any]) -> int:
-    """Prompt tokens the engine reused this round, or -1 if it did not say.
+def cached_prompt_tokens(outputs: Sequence[Any]) -> list[int]:
+    """Prompt tokens the engine reused, one count per request, or -1s if it
+    did not say.
+
+    Per request rather than a round total, because the counts land in
+    `steps.jsonl` next to each step's `prompt_span` — the ratio of the two is
+    the diagnostic, and a round total would make that ratio unreadable.
 
     On a hybrid model — 48 gated-delta-net layers here against 16 full-attention
     ones — a prefix-cache hit is reconciled across every KV-cache group into one
@@ -67,12 +72,10 @@ def cached_prompt_tokens(outputs: Sequence[Any]) -> int:
     which costs a great deal and says nothing in any log, since this backend
     used to discard the number.
     """
-    if not outputs:
-        return -1
     counts = [getattr(output, "num_cached_tokens", None) for output in outputs]
     if any(count is None for count in counts):
-        return -1
-    return sum(counts)  # ty: ignore
+        return [-1] * len(counts)
+    return counts  # ty: ignore
 
 
 class VLLMModel:
@@ -138,8 +141,8 @@ class VLLMModel:
         )
         cached = cached_prompt_tokens(outputs)
         return [
-            self._to_generation(prompt_ids, output.outputs[0], cached)
-            for prompt_ids, output in zip(prompts, outputs, strict=True)
+            self._to_generation(prompt_ids, output.outputs[0], count)
+            for prompt_ids, output, count in zip(prompts, outputs, cached, strict=True)
         ]
 
     def _to_generation(

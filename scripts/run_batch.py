@@ -90,6 +90,25 @@ def summarise(results: list[Labels], elapsed: float, tokens: tuple[int, int] = (
     return "\n".join(lines)
 
 
+def cache_text(trajectory: Trajectory) -> str:
+    """` cache=NN%` — prompt tokens the engine reused, over steps after the
+    first, where the whole previous prompt should hit. Empty when the backend
+    did not report (hosted, HF, or an older vLLM).
+
+    Near-zero here is the finding this exists for: a hybrid model's prefix
+    cache is reconciled across KV-cache groups, and one group that cannot
+    match drags the hit to zero — the run then re-prefills every conversation
+    every round and no log says so (vLLM #45238).
+    """
+    later = trajectory.steps[1:]
+    if not later or any(s.cached_tokens < 0 for s in later):
+        return ""
+    prompt = sum(s.prompt_span[1] - s.prompt_span[0] for s in later)
+    if not prompt:
+        return ""
+    return f" cache={sum(s.cached_tokens for s in later) / prompt:.0%}"
+
+
 def build_model(config: RunConfig, fake: bool) -> ModelBackend:
     if fake:
         from escape_probes.model import FakeModel, ScriptedStep  # noqa: PLC0415
@@ -299,7 +318,7 @@ def main() -> int:
                 f"  [{done_count}/{len(todo)}] {instance} {condition} seed={seed} "
                 f"{trajectory.meta.outcome} steps={labels.n_steps} t*={labels.t_star} "
                 f"cue={'y' if labels.read_cue else 'n'} "
-                f"{trajectory.meta.wall_clock_seconds:.0f}s",
+                f"{trajectory.meta.wall_clock_seconds:.0f}s{cache_text(trajectory)}",
                 flush=True,
             )
         print(
