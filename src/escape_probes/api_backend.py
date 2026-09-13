@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Sequence
 from typing import Any, Protocol
 
@@ -199,6 +200,15 @@ class HTTPTransport:
     fake model with none of the optional dependency groups installed.
     """
 
+    TRANSIENT = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
+    """Statuses worth trying again.
+
+    Everything else — 400, 401, 404, 422 — is a configuration error, and the
+    only useful response to one is to fail immediately and loudly. Retrying a
+    404 from a provider pin the account's data policy rejects turns a legible
+    error into a slow one, which is how the screen lost a whole cell once.
+    """
+
     def __init__(self, config: ModelConfig) -> None:
         import httpx  # noqa: PLC0415
 
@@ -210,17 +220,38 @@ class HTTPTransport:
             headers={"Authorization": f"Bearer {key}"},
             timeout=httpx.Timeout(600.0),
         )
+        self.max_attempts = config.max_attempts
+        self.backoff_seconds = config.backoff_seconds
+        self.sleep = time.sleep
 
     def post(self, payload: dict[str, Any]) -> dict[str, Any]:
-        response = self.client.post(self.url, json=payload)
-        if response.is_error:
+        """One request, retried while the endpoint says the failure is temporary.
+
+        A trajectory is a chain: a rejection at step 20 discards the twenty
+        generations already paid for, because the driver cannot distinguish it
+        from a dead container. Thirty concurrent trajectories against one pinned
+        endpoint will be rate-limited, so this is the difference between a cell
+        completing and a cell half-completing.
+
+        The wait doubles. Retrying at a fixed interval is how a cell ends up
+        hammering a provider that is asking it to slow down.
+        """
+        wait = self.backoff_seconds
+        for attempt in range(1, self.max_attempts + 1):
+            response = self.client.post(self.url, json=payload)
+            if not response.is_error:
+                return dict(response.json())
             # The body, not just the status. A pinned provider that fails the
             # account's privacy policy leaves zero endpoints and comes back as a
             # bare `404 Not Found`, while the body says exactly which provider
             # was dropped and why. Without it the log says nothing usable and
             # the whole cell fails identically to a model that will not answer.
-            raise RuntimeError(f"{response.status_code} from {self.url}: {response.text[:600]}")
-        return dict(response.json())
+            detail = f"{response.status_code} from {self.url}: {response.text[:600]}"
+            if response.status_code not in self.TRANSIENT or attempt == self.max_attempts:
+                raise RuntimeError(detail)
+            self.sleep(wait)
+            wait *= 2
+        raise AssertionError("unreachable")
 
 
 __all__ = ["APIModel", "HTTPTransport", "Transport", "text_from_api_message", "to_api_messages"]
