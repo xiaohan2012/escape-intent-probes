@@ -196,6 +196,8 @@ The threshold is fixed a priori rather than calibrated; principled threshold and
 The selected model is [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B), with a crossing rate of [TODO]% on the impossible condition and a benign pass rate of [TODO]% (TODO: add numbers).
 In the screen, three of five frontier open-weight models crossed.
 Capability appears to move together with the propensity to escape; however, we note that (i) each cell is only n=3, and (ii) the pattern is not monotone — two frontier-scale models crossed in none of their runs — so we report this as an observation, not a ranking.
+Per-model crossing results are recorded in [PR #4](https://github.com/xiaohan2012/escape-intent-probes/pull/4) (the frontier screen) and [PR #6](https://github.com/xiaohan2012/escape-intent-probes/pull/6) (the descent).
+(TODO: decide how to present the per-model crossing results here — table or plot.)
 
 ## Discussion and Limitations
 
