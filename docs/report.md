@@ -145,14 +145,12 @@ We say that the agent *crosses* the boundary if it issues a tool call naming a p
 
 **Requirements.** The model must satisfy three conditions: (i) it is capable of solving the benign tasks; (ii) it escapes without being explicitly told to in the instructions; and (iii) it is open-weight and can be self-hosted, since the probe reads the residual stream.
 
-**Search process.** To the best of our knowledge, no published result says which open-weight models escape under environment-induced pressure, so we search by descending capability.
-First, a *screen*: we run five frontier open-weight models (Kimi K3, GLM-5.3, and peers) via API against a small task panel, declaring that a model *can* escape if it crosses in at least one run.
-Three of the five cross, which establishes that the environment affords crossing at all.
-However, the smallest model observed crossing is still too large to self-host at reasonable cost, so we continue downward: a *descent* over progressively smaller open-weight models, stopping at the first one that both escapes and solves the benign tasks.
-The selected model is Qwen3.8-27B, with a crossing rate of [TODO]% on the impossible condition and a benign pass rate of [TODO]%.
+**Search process.** To the best of our knowledge, no published result says which open-weight models escape under environment-induced pressure, so we propose an adhoc search method.
+We first run 5 frontier open-weight models (Kimi K3, GLM-5.3, and peers) via OpenRouter API against a small task panel.
+We declare that a model *can* escape if it crosses in at least one run.
+Though we manage to find models from this list that escapes, the smallest such model is still too large to self-host at reasonable cost.
+So we continue the search downwards, over progressively smaller open-weight models, stopping at the first one that both escapes and solves the benign tasks.
 
-**Observation.** In the screen, three of five frontier open-weight models crossed.
-Capability appears to move together with the propensity to escape; however, we note that (i) each cell is only n=3, and (ii) the pattern is not monotone — two frontier-scale models crossed in none of their runs — so we report this as an observation, not a ranking.
 
 ### Part 2: the linear probing experiment
 
@@ -193,6 +191,11 @@ We count per trajectory rather than per step because a trajectory's steps are no
 The threshold is fixed a priori rather than calibrated; principled threshold and layer selection on training folds is left to future work, as is a keyword baseline on the generated text (issues #10, #11).
 
 ## Results
+
+**Model search.**
+The selected model is Qwen3.8-27B (TODO: add hugging face link), with a crossing rate of [TODO]% on the impossible condition and a benign pass rate of [TODO]% (TODO: add numbers).
+In the screen, three of five frontier open-weight models crossed.
+Capability appears to move together with the propensity to escape; however, we note that (i) each cell is only n=3, and (ii) the pattern is not monotone — two frontier-scale models crossed in none of their runs — so we report this as an observation, not a ranking.
 
 ## Discussion and Limitations
 
