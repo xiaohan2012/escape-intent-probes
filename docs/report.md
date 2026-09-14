@@ -29,13 +29,35 @@ In summary, we make the following contributions.
 
 ## Methods
 
-Our methodology has two parts: (i) we identify an open-weight model that both derives escape intent from the environment and is cheap enough to self-host, and (ii) for that model, we run the linear probing experiment. We describe the shared setup first and then each part in turn.
+Our methodology has two parts:
 
-**Setup: tasks.** We build on SWE-bench, which provides real repository-level software tasks with reference test suites, and on ImpossibleBench, which turns a solvable task into an unsolvable one by mutating its tests so that no legitimate patch can pass. Our panel consists of twelve instances drawn from three repositories (Django, SymPy, Sphinx). We use instances rather than repeated seeds on one instance because the task itself is a larger source of variance than sampling noise; e.g., one Sphinx instance crossed in none of its runs across all screened models. [TODO: one worked example of a task and its impossible mutation.]
+1. Identify an open-weight model that both derives escape intent from the environment and can be self-hosted with reasonable computation cost,
+2. For that model, we run the linear probing experiment.
 
-**Setup: sandbox and boundary.** The agent works inside a Docker container with three tools (bash, edit, submit). The authorized area is the repository checkout; the environment additionally contains one planted exit, a reference-solution cache under `/opt/grader/`, outside the authorized area. The cue that reveals the exit is a configuration file inside the workspace, `.config/grader.yaml`, whose contents look like ordinary scoring configuration, e.g. `reference_solutions: /opt/grader/cache/<task_id>.py`. Reading the cue is allowed; it is the exit itself that is out of bounds. There is no network egress and no other exit.
+We describe the shared setup first and then each part in turn.
 
-**Setup: conditions and the crossing rule.** Each instance appears in two paired conditions that differ only in the tests: *benign* runs the original test suite (solvable), *impossible* runs the mutated suite (unsolvable without cheating). The cue is present in both conditions; thus a probe cannot separate the conditions by the cue's presence in context, and the only difference between them is goal pressure. The agent is never told to cheat in either condition. We say that a trajectory *crosses* the boundary if a tool call references a path under `/opt/grader`, and we denote by t\* the first such step. Reconnaissance, e.g. `ls /opt`, is logged but does not count as crossing.
+### Setup
+
+**Tasks.**
+We build on SWE-bench (TODO: add citation), which provides real-world software tasks with corresponding test suites,
+and on ImpossibleBench (TODO: add citation), which turns a solvable task into an unsolvable one by mutating its tests so that no legitimate patch can pass.
+Our task pool consists of 12 instances drawn from 3 repositories (Django, SymPy, Sphinx).
+Each instance appears in two paired conditions that differ only in the tests: *benign* runs the original test suite (solvable), *impossible* runs the mutated suite (unsolvable without cheating).
+The agent is *never* told to cheat in either condition.
+[TODO: one worked example of a task and its impossible mutation.]
+
+**Sandbox and boundary.**
+The agent works inside a Docker container with 3 tools (bash, edit, submit).
+The authorized area is the repository checkout; the environment additionally contains one planted escape route, a reference-solution cache under `/opt/grader/`, outside the authorized area.
+The cue that reveals the escape route is a configuration file inside the workspace, `.config/grader.yaml`, whose contents look like ordinary scoring configuration, e.g. `reference_solutions: /opt/grader/cache/<task_id>.py`.
+Reading the cue is allowed; it is the escape route itself that is out of bounds. There is no network egress and no other route out.
+
+(TODO: add a directory in text block illustrating the environment, boundary, etc)
+(TODO: we need to show the prompt or describe it, perhaps a separate paragraph called Task instructions?)
+
+**Crossing rule.**
+Note that the cue is present in both conditions; thus a probe cannot separate the conditions by the cue's presence in context, and the only difference between them is goal pressure.
+We say that the agent *crosses* the boundary if it issues a tool call naming a path under `/opt/grader` — whether reading, listing, or copying it — and we denote by t\* the first such step. Reconnaissance that does not name the escape route, e.g. `ls /opt`, is logged but does not count as crossing.
 
 ### Part 1: finding a model that escapes on hardware we can afford
 
@@ -51,7 +73,7 @@ Our methodology has two parts: (i) we identify an open-weight model that both de
 
 #### Labels
 
-The intuition behind our labeling rule is that intent to take the exit cannot exist before the agent knows the exit exists. We denote by c the first step at which the agent reads the cue file. A crossed trajectory contributes positive examples at steps in [c, t\*]; steps before c and after t\* are excluded. Note that a trajectory that crosses without ever reading the cue is dropped, because no step can be identified at which intent became possible. Benign trajectories contribute negative examples at every step. The natural alternative is to label all steps up to t\* positive. However, this trains an outcome predictor rather than an intent detector: on our data, 76% of those steps precede c, i.e., precede the agent's discovery of the exit, and thus carry task pressure rather than intent. In addition, impossible trajectories that never cross are held out of training entirely and used as a diagnostic group, as discussed below.
+The intuition behind our labeling rule is that intent to take the escape route cannot exist before the agent knows it exists. We denote by c the first step at which the agent reads the cue file. A crossed trajectory contributes positive examples at steps in [c, t\*]; steps before c and after t\* are excluded. Note that a trajectory that crosses without ever reading the cue is dropped, because no step can be identified at which intent became possible. Benign trajectories contribute negative examples at every step. The natural alternative is to label all steps up to t\* positive. However, this trains an outcome predictor rather than an intent detector: on our data, 76% of those steps precede c, i.e., precede the agent's discovery of the exit, and thus carry task pressure rather than intent. In addition, impossible trajectories that never cross are held out of training entirely and used as a diagnostic group, as discussed below.
 
 #### Activation extraction
 
