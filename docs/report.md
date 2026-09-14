@@ -182,8 +182,8 @@ Building the probes mainly entails how to construct the training data: (i) what 
 #### Activation extraction
 
 The design question is at which token position(s) do we extract the internal activations.
-
-As an illustration, consider step 5 of the toy trajectory above — the crossing step:
+For a given step, we consider the response tokens, extract the activations of all these tokens, and take the average of the activation vectors.
+An illustration is given below.
 
 ```text
  [prompt: history + step-4 observation]  [<think> … </think> <tool_call> bash: ls /opt/grader/cache </tool_call>]
@@ -192,7 +192,6 @@ As an illustration, consider step 5 of the toy trajectory above — the crossing
  (the tool call executes only after this vector is read)
 ```
 
-The same recipe applies to every step, including the harmless early ones; the probe sees one such vector per step and knows nothing about the step's position in the trajectory.
 
 #### Labels
 
