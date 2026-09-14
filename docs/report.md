@@ -181,11 +181,11 @@ Building the probes mainly entails how to construct the training data: (i) what 
 
 #### Activation extraction
 
-Per step and per layer we read one vector: at a given layer, we take the residual-stream activation at each of the step's generated tokens and average them, giving one d-dimensional vector per step per layer — the model's internal state while writing its reasoning and tool call for that step.
-Note that this position is read after the step's text is generated but before the tool call is executed; therefore an alarm at this position can still block the action.
-
-The intuition behind this extraction point is that if intent is represented anywhere, it is in the model's state while it is thinking about and writing the action.
-Averaging over all generated tokens captures the step's whole "thought" rather than a single-token snapshot, and makes no assumption about where within the step the signal appears.
+The intuition behind our extraction point is that if intent is represented anywhere, it is in the model's state while it is thinking about and writing the action.
+Accordingly, per step and per layer we read one vector: the residual-stream activations at the step's generated tokens, averaged.
+Averaging captures the step's whole "thought" rather than a single-token snapshot, and makes no assumption about where within the step the signal appears.
+Note that this vector is read after the step's text is generated but before the tool call is executed; therefore an alarm here can still block the action.
+Activations are captured in a second, deterministic pass that replays each trajectory's frozen token ids, so every vector is exactly re-derivable from the stored trajectories.
 
 As an illustration, consider step 5 of the toy trajectory above — the crossing step:
 
