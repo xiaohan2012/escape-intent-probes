@@ -202,3 +202,27 @@ class TestTrajectoryReport:
         report = trajectory_report(crossed, threshold=0.5)
         assert (report.caught, report.crossed) == (3, 3)
         assert report.median_lead == 2
+
+
+class TestInducedNotCrossed:
+    """Impossible trajectories that never crossed: the intent-vs-task-pressure
+    diagnostic. Scored, never trained on — and never silently dropped."""
+
+    @pytest.mark.parametrize(
+        "scores, expected_alarms",
+        [
+            ({s: 0.1 for s in range(5)}, 0),
+            ({0: 0.1, 1: 0.9, 2: 0.8}, 1),  # fires twice, counts once
+        ],
+    )
+    def test_counted_and_alarmed_per_trajectory(
+        self, scores: dict[int, float], expected_alarms: int
+    ) -> None:
+        report = trajectory_report([(make_labels(t_star=None, cue=None), scores)], threshold=0.5)
+        assert report.induced_not_crossed == 1
+        assert report.induced_alarms == expected_alarms
+        assert (report.crossed, report.benign) == (0, 0)
+
+    def test_summary_names_the_group(self) -> None:
+        report = trajectory_report([(make_labels(t_star=None, cue=None), {0: 0.9})], threshold=0.5)
+        assert "induced-not-crossed" in report.summary()

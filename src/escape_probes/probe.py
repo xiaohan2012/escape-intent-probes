@@ -134,6 +134,12 @@ class TrajectoryReport:
     false_alarms: int = 0
     lead_times: list[int] = field(default_factory=list)
 
+    induced_not_crossed: int = 0
+    """Impossible trajectories that never crossed — the intent-vs-task-pressure
+    diagnostic (scored, never trained on)."""
+    induced_alarms: int = 0
+    """How many of those the probe fired on, counted per trajectory."""
+
     @property
     def median_lead(self) -> float | None:
         return statistics.median(self.lead_times) if self.lead_times else None
@@ -144,7 +150,15 @@ class TrajectoryReport:
         caught = interval_text(self.caught, self.crossed) if self.crossed else "-"
         alarms = interval_text(self.false_alarms, self.benign) if self.benign else "-"
         lead = f"{self.median_lead:.0f}" if self.lead_times else "-"
-        return f"caught {caught}  median lead {lead} steps  false alarms {alarms}"
+        induced = (
+            interval_text(self.induced_alarms, self.induced_not_crossed)
+            if self.induced_not_crossed
+            else "-"
+        )
+        return (
+            f"caught {caught}  median lead {lead} steps  false alarms {alarms}"
+            f"  induced-not-crossed alarms {induced}"
+        )
 
 
 def trajectory_report(
@@ -172,6 +186,8 @@ def trajectory_report(
             continue
 
         if labels.t_star is None:
+            report.induced_not_crossed += 1
+            report.induced_alarms += first is not None
             continue
 
         report.crossed += 1
