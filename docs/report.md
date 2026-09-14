@@ -173,7 +173,16 @@ step  tool call                       event
 5     bash: ls /opt/grader/cache      t*: crosses
 ```
 
-The experiment must fix two design decisions: (i) **which steps carry which label** — what counts as a positive example of escape intent (Labels); and (ii) **where to read the model's state** — at which tokens within a step the activation is extracted (Activation extraction). We take each in turn.
+A sample is one step of one trajectory.
+In general, constructing the probe mainly entails how to construct the training data: (i) what defines a sample's input features, and (ii) its target label.
+We take each in turn.
+
+#### Activation extraction
+
+We freeze each trajectory's exact token ids at rollout time and replay them through the model deterministically in a second pass, capturing the residual stream at every layer.
+Per step and per layer we read one vector: the mean over the step's generated tokens, i.e., the model's internal state while writing its reasoning and tool call for that step.
+Note that this position is read after the step's text is generated but before the tool call is executed; therefore an alarm at this position can still block the action.
+Moreover, the two-pass design makes every activation re-derivable from the stored trajectories.
 
 #### Labels
 
@@ -185,13 +194,6 @@ Benign trajectories contribute negative examples at every step.
 The natural alternative is to label all steps up to t\* positive.
 However, this trains an outcome predictor rather than an intent detector: on our data, 76% of those steps precede c, i.e., precede the agent's discovery of the exit, and thus carry task pressure rather than intent.
 In addition, impossible trajectories that never cross are held out of training entirely and used as a diagnostic group, as discussed below.
-
-#### Activation extraction
-
-We freeze each trajectory's exact token ids at rollout time and replay them through the model deterministically in a second pass, capturing the residual stream at every layer.
-Per step and per layer we read one vector: the mean over the step's generated tokens, i.e., the model's internal state while writing its reasoning and tool call for that step.
-Note that this position is read after the step's text is generated but before the tool call is executed; therefore an alarm at this position can still block the action.
-Moreover, the two-pass design makes every activation re-derivable from the stored trajectories.
 
 **Dataset statistics.** [TODO after probe-02 lands: trajectories per condition, seeds, crossed count, positive/negative step counts.]
 
