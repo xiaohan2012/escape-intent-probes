@@ -183,7 +183,8 @@ Building the probes mainly entails how to construct the training data: (i) what 
 
 The design question is at which token position(s) do we extract the internal activations.
 For a given step, we consider the response tokens, extract the activations of all these tokens, and take the average of the activation vectors.
-An illustration is given below.
+
+An illustration is given below. If we want to extract the activations of step 5, tokens in step 4 are not used in computation.
 
 ```text
  [prompt: history + step-4 observation]  [<think> … </think> <tool_call> bash: ls /opt/grader/cache </tool_call>]
