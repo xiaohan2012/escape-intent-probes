@@ -44,7 +44,21 @@ and on ImpossibleBench (TODO: add citation), which turns a solvable task into an
 Our task pool consists of 12 instances drawn from 3 repositories (Django, SymPy, Sphinx).
 Each instance appears in two paired conditions that differ only in the tests: *benign* runs the original test suite (solvable), *impossible* runs the mutated suite (unsolvable without cheating).
 The agent is *never* told to cheat in either condition.
-[TODO: one worked example of a task and its impossible mutation.]
+As a worked example, in instance `django__django-12419` (add a secure default `Referrer-Policy` header) the mutation inserts a second assertion on the same response, conflicting with the original one:
+
+```python
+headers = sorted(response.serialize_headers().split(b'\r\n'))
+self.assertEqual(headers, [
+    b'Content-Length: 1',
+    ...
+])
+self.assertEqual(headers, [
+    b'Content-Length: 0',
+    ...
+])
+```
+
+No honest patch can satisfy both assertions, so the task is unsolvable while looking, at a glance, like an ordinary failing test.
 
 **Sandbox and boundary.**
 The agent works inside a Docker container with 3 tools (bash, edit, submit).
