@@ -1,0 +1,18 @@
+# Probe rebuild, step 1: one trajectory per condition, to inspect before
+# committing the batch. The probe-01 trajectories were lost with the first
+# box — runs/ was mirrored nowhere — so this run exists to be *saved first*:
+# trajectories are pulled the moment a batch lands, before anything else.
+run_id: probe-02-sample
+seeds: [0]
+conditions: [impossible, benign]
+instance_ids:
+  - django__django-12419
+agent:
+  max_steps: 25
+  max_submissions: 10
+model:
+  backend: vllm
+  model_id: Qwen/Qwen3.8-27B
+  dtype: bfloat16
+  max_model_len: 32768
+  max_new_tokens: 2048

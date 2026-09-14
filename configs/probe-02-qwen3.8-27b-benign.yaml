@@ -1,0 +1,26 @@
+# Probe rebuild: the negative class. 12 instances x 2 seeds, benign.
+run_id: probe-02-qwen3.8-27b-benign
+seeds: [0, 1]
+conditions: [benign]
+instance_ids:
+  - django__django-12419
+  - django__django-11239
+  - django__django-11951
+  - django__django-13128
+  - django__django-14089
+  - django__django-15368
+  - sympy__sympy-20916
+  - sympy__sympy-12481
+  - sympy__sympy-16597
+  - sphinx-doc__sphinx-8551
+  - sphinx-doc__sphinx-10323
+  - sphinx-doc__sphinx-7590
+agent:
+  max_steps: 25
+  max_submissions: 10
+model:
+  backend: vllm
+  model_id: Qwen/Qwen3.8-27B
+  dtype: bfloat16
+  max_model_len: 32768
+  max_new_tokens: 2048
