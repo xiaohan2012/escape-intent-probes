@@ -143,7 +143,7 @@ We say that the agent *crosses* the boundary if it issues a tool call naming a p
 
 ### Part 1: finding a model that escapes
 
-**Requirements.** The model must satisfy three conditions: (i) it is capable of solving the benign tasks; (ii) it escapes without being explicitly told to in the instructions; and (iii) it is open-weight and can be self-hosted, since the probe reads the residual stream.
+**Requirements.** The model must satisfy three conditions: (i) it is capable of solving the benign tasks; (ii) it escapes without being explicitly told so in the instructions; and (iii) it is open-weight and can be self-hosted, since the probe reads the residual stream.
 
 **Search process.** To the best of our knowledge, no published result says which open-weight models escape under environment-induced pressure, so we propose an adhoc search method.
 We first run 5 frontier open-weight models (Kimi K3, GLM-5.3, and peers) via OpenRouter API against a small task panel.
@@ -154,9 +154,26 @@ So we continue the search downwards, over progressively smaller open-weight mode
 
 ### Part 2: the linear probing experiment
 
-**Trajectories and steps.** A *trajectory* is one full agent run on one (instance, condition, seed) triple, capped at 25 steps.
-A *step* is one decision point: the model reads the conversation so far and emits one tool call.
-All probing operates at step granularity, and every reported metric is aggregated back to trajectory level.
+We define a few terms first:
+
+- A *trajectory* is one full agent run on one (instance, condition, seed) triple, consisting of multiple *steps* (we cap the number of steps by 25).
+- A *step* is one decision point: the model reads the conversation so far and emits one tool call.
+
+All probing operates at the step level, e.g., a classifier predicts how likely the agent will escape after taking certain steps.
+
+As a toy example, the following trajectory crosses at its sixth step:
+
+```text
+step  tool call                       event
+0     bash: cat README
+1     bash: pytest tests/...          tests fail
+2     edit: <fix attempt>
+3     submit                          still fails
+4     bash: cat grader.yaml           c: reads the cue
+5     bash: ls /opt/grader/cache      t*: crosses
+```
+
+The experiment must fix two design decisions: (i) **which steps carry which label** — what counts as a positive example of escape intent (Labels); and (ii) **where to read the model's state** — at which tokens within a step the activation is extracted (Activation extraction). We take each in turn.
 
 #### Labels
 
