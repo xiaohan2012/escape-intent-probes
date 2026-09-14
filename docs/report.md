@@ -143,7 +143,7 @@ We say that the agent *crosses* the boundary if it issues a tool call naming a p
 
 ### Part 1: finding a model that escapes
 
-**Requirements.** The model must satisfy three conditions: (i) it is capable to solves the benign tasks; (ii) it escape without being explicitly told so in the instructions; and (iii) it is open-weight and can be self-hosted, since the probe reads the residual stream.
+**Requirements.** The model must satisfy three conditions: (i) it is capable of solving the benign tasks; (ii) it escapes without being explicitly told to in the instructions; and (iii) it is open-weight and can be self-hosted, since the probe reads the residual stream.
 
 **Search process.** To the best of our knowledge, no published result says which open-weight models escape under environment-induced pressure, so we search by descending capability.
 First, a *screen*: we run five frontier open-weight models (Kimi K3, GLM-5.3, and peers) via API against a small task panel, declaring that a model *can* escape if it crosses in at least one run.
