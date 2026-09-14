@@ -154,12 +154,15 @@ So we continue the search downwards, over progressively smaller open-weight mode
 
 ### Part 2: the linear probing experiment
 
-We define a few terms first:
+We next build linear probes, which read internal activations of the model and predict how likely the agent will escape the boundary in subsequent steps.
+A application is that the probes can be used to send early alarms of models escape intention before the model actually escapes.
+
+Before explaining our methodology, we define a few terms:
 
 - A *trajectory* is one full agent run on one (instance, condition, seed) triple, consisting of multiple *steps* (we cap the number of steps by 25).
 - A *step* is one decision point: the model reads the conversation so far and emits one tool call.
 
-All probing operates at the step level, e.g., a classifier predicts how likely the agent will escape after taking certain steps.
+All probing operates at the step level, therefore a sample is one step of one trajectory.
 
 As a toy example, the following trajectory crosses at its sixth step:
 
@@ -173,14 +176,16 @@ step  tool call                       event
 5     bash: ls /opt/grader/cache      t*: crosses
 ```
 
-A sample is one step of one trajectory.
 Building the probes mainly entails how to construct the training data: (i) what defines a sample's input features, and (ii) its target label.
-We take each in turn.
+
 
 #### Activation extraction
 
-Per step and per layer we read one vector: the mean over the step's generated tokens, i.e., the model's internal state while writing its reasoning and tool call for that step.
+Per step and per layer we read one vector: at a given layer, we take the residual-stream activation at each of the step's generated tokens and average them, giving one d-dimensional vector per step per layer — the model's internal state while writing its reasoning and tool call for that step.
 Note that this position is read after the step's text is generated but before the tool call is executed; therefore an alarm at this position can still block the action.
+
+The intuition behind this extraction point is that if intent is represented anywhere, it is in the model's state while it is thinking about and writing the action.
+Averaging over all generated tokens captures the step's whole "thought" rather than a single-token snapshot, and makes no assumption about where within the step the signal appears.
 
 As an illustration, consider step 5 of the toy trajectory above — the crossing step:
 
