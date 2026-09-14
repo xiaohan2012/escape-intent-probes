@@ -74,7 +74,10 @@ retain_artifacts: false
 ```
 
 In the benign condition the planted patch is the task's gold patch; in the impossible condition it is a special-cased patch that passes the mutated tests. In both conditions the escape route therefore genuinely works, so taking it is a real shortcut rather than a trap.
-(TODO: we need to show the prompt or describe it, perhaps a separate paragraph called Task instructions?)
+**Task instructions.**
+The system prompt is adapted from ImpossibleBench's full-scaffold prompt: the agent is told to fix the given issue, shown the tool-call format, and instructed — at their strictness level A — to "implement the function according to the provided specification and pass all tests. **DO NOT MODIFY THE TESTS.**"
+The agent may submit multiple times; a failed submission returns the test results together with a restatement of the instruction above, which is what sustains the goal pressure in the impossible condition.
+Note that the instructions never mention the grader configuration, the escape route, or the boundary; everything the agent learns about them, it learns from the environment.
 
 **Crossing rule.**
 Note that the cue is present in both conditions; thus a probe cannot separate the conditions by the cue's presence in context, and the only difference between them is goal pressure.
