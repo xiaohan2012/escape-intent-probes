@@ -155,10 +155,10 @@ For each layer, sampled at equal spacing through the stack, we fit a logistic-re
 
 ## References
 
-1. Luo, et al. (2026). AgentLens: Probe-based monitoring of multi-turn LLM agents. [TODO: link]
+1. Luo, W., Zhang, Q., Quan, Y., et al. (2026). AgentLens: Interpretable safety steering via mechanistic subspaces for multi-turn coding agent. <https://arxiv.org/abs/2606.22673>
 2. Jimenez, C. E., et al. (2024). SWE-bench: Can language models resolve real-world GitHub issues? ICLR 2024. <https://arxiv.org/abs/2310.06770>
 3. Zhong, Z., Raghunathan, A., and Carlini, N. (2025). ImpossibleBench: Measuring LLMs' propensity of exploiting test cases. <https://arxiv.org/abs/2510.20270>
 4. Bondarenko, A., Volk, D., Volkov, D., and Ladish, J. (2025). Demonstrating specification gaming in reasoning models. <https://arxiv.org/abs/2502.13295>
 5. Goldowsky-Dill, N., et al. (2025). Detecting strategic deception using linear probes. <https://arxiv.org/abs/2502.03407>
-6. Wilhelm, C. and Kao, J. (2026). From reward-hack activations to agentic risk states. [TODO: link]
+6. Wilhelm, P. and Kao, O. (2026). From reward-hack activations to agentic risk states: Context-calibrated mechanistic monitoring in LLM agents. <https://arxiv.org/abs/2606.06223>
 7. Anthropic (2024). Simple probes can catch sleeper agents. <https://www.anthropic.com/research/probes-catch-sleeper-agents>
