@@ -2,11 +2,15 @@
 
 **Han Xiao** (xiaohan2012@gmail.com) · **Yong Deng** (scdeng27@gmail.com)
 
+*September 14, 2026 — Apart Research × CeSIA AI Incident Response Sprint*
+
 ## TL;DR
 
 - We ask if open-weight models can escape under environment pressure, without being instructed to
 - We identify a few open-weight models that exhibit such behavior
 - We train linear probes on the internal activations to detect the intent before the model executes, with mixed results: most escapes are caught ahead of the action, but benign runs raise false alarms often
+
+> This report was produced during the [AI Incident Response Sprint](https://apartresearch.com/sprints/ai-incident-response-sprint-2026-09-11-to-2026-09-13?utm_source=newsletter&utm_medium=email&utm_campaign=ai-incident-response-26) organized by Apart Research
 
 ## Introduction
 
