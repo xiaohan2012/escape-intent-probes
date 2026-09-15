@@ -172,6 +172,7 @@ class APIModel:
             prompt_token_ids=(),
             gen_token_ids=(),
             text=text_from_api_message(choices[0].get("message") or {}),
+            finish_reason=str(choices[0].get("finish_reason") or ""),
             tool_start_token_idx=None,
             prompt_tokens=int(usage.get("prompt_tokens") or 0),
             completion_tokens=int(usage.get("completion_tokens") or 0),

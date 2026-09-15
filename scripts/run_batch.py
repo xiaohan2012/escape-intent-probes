@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import time
 from collections import Counter
@@ -89,6 +90,25 @@ def summarise(results: list[Labels], elapsed: float, tokens: tuple[int, int] = (
     return "\n".join(lines)
 
 
+def cache_text(trajectory: Trajectory) -> str:
+    """` cache=NN%` — prompt tokens the engine reused, over steps after the
+    first, where the whole previous prompt should hit. Empty when the backend
+    did not report (hosted, HF, or an older vLLM).
+
+    Near-zero here is the finding this exists for: a hybrid model's prefix
+    cache is reconciled across KV-cache groups, and one group that cannot
+    match drags the hit to zero — the run then re-prefills every conversation
+    every round and no log says so (vLLM #45238).
+    """
+    later = trajectory.steps[1:]
+    if not later or any(s.cached_tokens < 0 for s in later):
+        return ""
+    prompt = sum(s.prompt_span[1] - s.prompt_span[0] for s in later)
+    if not prompt:
+        return ""
+    return f" cache={sum(s.cached_tokens for s in later) / prompt:.0%}"
+
+
 def build_model(config: RunConfig, fake: bool) -> ModelBackend:
     if fake:
         from escape_probes.model import FakeModel, ScriptedStep  # noqa: PLC0415
@@ -140,9 +160,23 @@ def main() -> int:
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
+    # vLLM forks its engine core, and by then something in this process has
+    # already initialised CUDA — torch cannot re-initialise it across a fork, and
+    # the failure is a wall of engine-core traceback that says nothing about the
+    # rollout. Set before any vLLM import so the engine picks it up.
+    os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+
     if args.config is not None:
         # The config wins, and says so by overwriting the flags rather than
-        # sitting beside them in a second set of names.
+        # sitting beside them in a second set of names. `--run-id` is the one
+        # flag that cannot be overwritten, because it names the output
+        # directory: silently ignoring it wrote a throwaway 3-step measurement
+        # into the probe dataset, and the resume logic then skipped those eight
+        # work items as already finished. A flag that does nothing is worse than
+        # one that refuses.
+        if parser.get_default("run_id") != args.run_id:
+            print("--run-id has no effect with --config; the config names the run", file=sys.stderr)
+            return 1
         config = RunConfig.from_yaml(args.config)
         args.instances = list(config.instance_ids)
         args.conditions = list(config.conditions)
@@ -256,6 +290,24 @@ def main() -> int:
                 instance, condition, seed = opened[index][0]
                 print(f"  {instance} {condition} {seed}: FAILED {error}", flush=True)
 
+            def report_round(round_index: int, generations) -> None:  # noqa: ANN001
+                """The prefix-cache diagnostic, live rather than at batch end.
+
+                From round 1 every prompt is the previous one plus a suffix, so
+                the reused fraction should be near its block-granular ceiling.
+                Near zero is the finding (vLLM #45238, or KV-pool eviction) and
+                should be visible mid-batch, not eighty minutes later.
+                """
+                reused = sum(g.cached_tokens for g in generations if g.cached_tokens > 0)
+                prompt = sum(len(g.prompt_token_ids) for g in generations)
+                known = all(g.cached_tokens >= 0 for g in generations)
+                if round_index and prompt and known:
+                    print(
+                        f"  -- round {round_index}: cache {reused / prompt:.0%} "
+                        f"({reused}/{prompt} prompt tokens reused)",
+                        flush=True,
+                    )
+
             # Which driver, asked of the backend rather than re-derived from
             # the config: `config.backend` is switched on once already, where
             # the model is built, and answering the same question twice is two
@@ -266,7 +318,9 @@ def main() -> int:
                 )
             else:
                 batched = model if hasattr(model, "generate_batch") else SerialBatch(model)
-                trajectories = drive_batch(steps, batched, on_error=report_error)
+                trajectories = drive_batch(
+                    steps, batched, on_error=report_error, on_round=report_round
+                )
 
         group_seconds = time.monotonic() - group_started
         for (instance, condition, seed), trajectory in zip(
@@ -284,7 +338,7 @@ def main() -> int:
                 f"  [{done_count}/{len(todo)}] {instance} {condition} seed={seed} "
                 f"{trajectory.meta.outcome} steps={labels.n_steps} t*={labels.t_star} "
                 f"cue={'y' if labels.read_cue else 'n'} "
-                f"{trajectory.meta.wall_clock_seconds:.0f}s",
+                f"{trajectory.meta.wall_clock_seconds:.0f}s{cache_text(trajectory)}",
                 flush=True,
             )
         print(

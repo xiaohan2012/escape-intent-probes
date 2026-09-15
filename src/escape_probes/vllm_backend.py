@@ -27,11 +27,17 @@ trajectory produced here is tokenised exactly as Pass 2 will re-tokenise it.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Any, Protocol
 
-from escape_probes.chat import command_token_index, render_prompt, select_tool_schemas
+from escape_probes.chat import render_prompt, select_tool_schemas
 from escape_probes.config import DEFAULT_TOOLS, ModelConfig
-from escape_probes.model import Generation, Message
+from escape_probes.model import (
+    THINK_OPEN,
+    Generation,
+    Message,
+    command_token_index,
+    split_reasoning,
+)
 
 
 class Completion(Protocol):
@@ -44,6 +50,33 @@ class Completion(Protocol):
 
     token_ids: Sequence[int]
     text: str
+    finish_reason: str | None
+
+
+def cached_prompt_tokens(outputs: Sequence[Any]) -> list[int]:
+    """Prompt tokens the engine reused, one count per request, or -1s if it
+    did not say.
+
+    Per request rather than a round total, because the counts land in
+    `steps.jsonl` next to each step's `prompt_span` — the ratio of the two is
+    the diagnostic, and a round total would make that ratio unreadable.
+
+    On a hybrid model — 48 gated-delta-net layers here against 16 full-attention
+    ones — a prefix-cache hit is reconciled across every KV-cache group into one
+    length, and a group that cannot match drags it to zero. The 16 layers that
+    matched perfectly are then re-prefilled anyway (vLLM #45238, roughly 2x TTFT
+    in their report).
+
+    Every round after the first should be almost entirely a hit here, because
+    each prompt is the previous one plus a suffix. A zero from round 2 onwards
+    means the whole conversation is being re-prefilled for every trajectory —
+    which costs a great deal and says nothing in any log, since this backend
+    used to discard the number.
+    """
+    counts = [getattr(output, "num_cached_tokens", None) for output in outputs]
+    if any(count is None for count in counts):
+        return [-1] * len(counts)
+    return counts  # ty: ignore
 
 
 class VLLMModel:
@@ -70,6 +103,7 @@ class VLLMModel:
             tensor_parallel_size=config.tensor_parallel_size,
             gpu_memory_utilization=config.gpu_memory_utilization,
             max_model_len=config.max_model_len,
+            enforce_eager=config.enforce_eager,
             enable_prefix_caching=True,
             # Every step of a trajectory re-sends the whole conversation with
             # one exchange appended, so the prefix is shared across steps and
@@ -106,18 +140,32 @@ class VLLMModel:
             [TokensPrompt(prompt_token_ids=ids) for ids in prompts],
             self._sampling,
         )
+        cached = cached_prompt_tokens(outputs)
         return [
-            self._to_generation(prompt_ids, output.outputs[0])
-            for prompt_ids, output in zip(prompts, outputs, strict=True)
+            self._to_generation(prompt_ids, output.outputs[0], count)
+            for prompt_ids, output, count in zip(prompts, outputs, cached, strict=True)
         ]
 
-    def _to_generation(self, prompt_ids: list[int], completion: Completion) -> Generation:
+    def _to_generation(
+        self, prompt_ids: list[int], completion: Completion, cached: int = -1
+    ) -> Generation:
         gen_ids = list(completion.token_ids)
         text = completion.text
+        # Whether the prompt ends inside a think block is a property of this
+        # model's template, and this is the only place that has rendered it. A
+        # reasoning model whose generation hit the token cap mid-thought emits
+        # no closing tag, and calling that text `content` makes the next step's
+        # prompt stop being a prefix (D24).
+        opened = self.tokenizer.decode(prompt_ids[-4:]).endswith(THINK_OPEN + "\n")
+        reasoning, answer = split_reasoning(text, think_opened=opened)
         return Generation(
             prompt_token_ids=tuple(prompt_ids),
             gen_token_ids=tuple(gen_ids),
             text=text,
+            reasoning=reasoning,
+            answer=answer,
+            finish_reason=completion.finish_reason or "",
+            cached_tokens=cached,
             tool_start_token_idx=command_token_index(gen_ids, text, self._decode),
         )
 

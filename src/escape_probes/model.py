@@ -39,11 +39,60 @@ class ParsedCall:
     """Character offset of the first argument's value — probe position (b)."""
 
 
+THINK_CLOSE = "</think>"
+THINK_OPEN = "<think>"
+
+
+def split_reasoning(text: str, think_opened: bool = False) -> tuple[str, str]:
+    """A reasoning model's emission, split into its think block and its answer.
+
+    Qwen3.8-27B ends its generation prompt with `<think>\n`, so the model writes
+    its reasoning first and closes the block itself. Its template renders a
+    *past* assistant turn from a separate `reasoning_content` field:
+
+        '<|im_start|>assistant\n<think>\n' + reasoning_content
+            + '\n</think>\n\n' + content
+
+    Store the whole emission as `content` and the re-render produces an empty
+    think block with the reasoning as prose — so step 1's prompt stops being a
+    prefix of step 0's, and Pass 2 would replay a sequence the model never saw.
+    `add_step` catches it, which is what E4 is for, but catching it only turns a
+    silent corruption into a stopped batch.
+
+    Both halves are trimmed because the template trims the reasoning and supplies
+    the surrounding newlines itself; anything else fails to round-trip.
+
+    `think_opened` says whether the prompt ended inside a think block, which
+    only the backend knows — it rendered the prompt. With it, an unterminated
+    generation is all reasoning; without it, text with no closing tag is all
+    content, which is the non-reasoning case and must stay untouched.
+    """
+    head, tag, tail = text.partition(THINK_CLOSE)
+    if tag:
+        return head.removeprefix(THINK_OPEN).strip(), tail.strip()
+    if think_opened:
+        # The prompt opened a block the model never closed — it ran out of
+        # tokens mid-thought. All of it is reasoning, and calling it content
+        # renders `<think>\n\n</think>\n\n` in front of it on the next step.
+        # That is not merely ugly: `\n\n` is one token where `\n` + `\n` is
+        # two, so the re-render stops being a prefix and the failure surfaces a
+        # step later, pointing at the wrong step.
+        return text.strip(), ""
+    return "", text.strip()
+
+
 class Message(BaseModel):
     """One turn of the conversation handed to the model."""
 
     role: str
     content: str
+
+    reasoning_content: str | None = None
+    """The think block, for templates that render it from its own field.
+
+    `None` rather than `""` so a template asking `reasoning_content is string`
+    treats an ordinary message as having no reasoning rather than an empty
+    block — the two render differently, and the difference breaks nesting."""
 
 
 class Generation(BaseModel):
@@ -56,6 +105,40 @@ class Generation(BaseModel):
     prompt_token_ids: tuple[int, ...]
     gen_token_ids: tuple[int, ...]
     text: str
+    """Everything the model emitted, verbatim. What gets parsed for a tool call."""
+
+    finish_reason: str = ""
+    """Why generation ended: "stop" for a natural end, "length" for the
+    `max_new_tokens` cap. Empty when the backend did not say.
+
+    Recorded because a capped generation has no closing think tag, and that
+    truncation once surfaced two steps later as a prefix-assertion failure
+    pointing at a healthy step (D24). `len(gen_ids) == max_new_tokens` almost
+    recovers it post hoc, but a generation can also end naturally at exactly
+    the cap."""
+
+    cached_tokens: int = -1
+    """Prompt tokens the engine reused from its prefix cache, or -1 if it did
+    not say.
+
+    -1 rather than 0 because "the engine did not report" and "the engine reused
+    nothing" are different findings and only one of them is a bug. On a hybrid
+    model the cache is all-or-nothing across the whole model — one KV-cache
+    group that cannot match drags the reconciled hit to zero — and every round
+    after the first should be almost entirely a hit here, since each prompt is
+    the previous one plus a suffix."""
+
+    reasoning: str = ""
+    """The think block, already split out. Empty for a model whose template has
+    no such block, and for a turn that produced none.
+
+    Filled by the backend rather than by the loop, because whether the prompt
+    opened a think block is a property of the template and only the backend
+    rendered it (D24)."""
+
+    answer: str = ""
+    """What follows the think block. Empty when the generation was cut off
+    inside one."""
 
     tool_start_token_idx: int | None = None
     """Index into `gen_token_ids` of the first token of the tool call's command

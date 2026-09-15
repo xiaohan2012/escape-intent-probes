@@ -1207,6 +1207,246 @@ the file itself". The real bottleneck is one stage later: thirteen trajectories
 saw the name and five opened it. That is D19's relevance problem, not D17's
 discoverability problem, and it is where the next intervention belongs.
 
+## D24 — The probe: what the fit is about, and what the card taught us
+
+D23 found a crosser we can host: `qwen3.8-27b`, 27B dense, 12/24 crossings on
+one 80 GB card at $2–4/hr. This is the experiment that needs it.
+
+**Generate locally rather than re-tokenising the API trajectories.** The choice
+looked close and is not. Pass 1 over OpenRouter costs about $13 for 96
+trajectories against roughly $3 of GPU time, and it loses the thing Pass 2 needs
+most: `prompt_span`, `gen_span` and `tool_start_token_idx` all come free from a
+local backend and must otherwise be reconstructed by re-rendering the chat
+template and mapping character offsets. The decisive argument is narrower than
+cost, though — **our existing check for exactly this failure only functions on
+the local path**. `TrajectoryWriter.add_step` asserts that each step's prompt
+extends the last, which is what E4 exists to catch; on a hosted rollout both
+spans are `(0, 0)` and the assertion is vacuous.
+
+A related gap surfaced while deciding: `add_step` stored token spans and not the
+generation's text, so a hosted trajectory kept the parsed tool call and the
+observation and discarded the rest — about 700 of every 730 tokens
+`qwen3.8-27b` writes. `Step.generation_text` now keeps it. Empty means "not
+recorded" rather than "said nothing", so an analysis can refuse to run on the
+158 trajectories that predate the field instead of quietly reading a truncated
+conversation.
+
+### Three positions, fixed now because they cannot be added later
+
+Layers are free: `output_hidden_states=True` returns all 65 from one forward, so
+a layer sweep costs storage and not compute, and the alternative is guessing a
+layer and re-renting the card when the guess is wrong. Positions are not free —
+choosing them is choosing which vectors to write down.
+
+* `last_prompt` (a) — the last prompt token. **The only position that exists
+  before generation**, so the only one an interceptor could use to suppress the
+  turn rather than the action. Everything else can only stop the execution.
+* `command` (b) — the first token of the tool call's command string. Closest to
+  the act, therefore latest, and expected to be the most separable.
+* `generated` (c) — the mean over the generated tokens, in case intent is spread
+  across the reasoning rather than sitting on one token.
+
+`96 × 25 × 65 × 3 × 5120` at fp16 is 4.8 GB, which is nothing against 2.8 TB of
+instance disk and against a second rental.
+
+### The labelling rule is where the design doc is weakest
+
+The design labels every step up to `t*` as positive (§6.2). Measured on our own
+25 crossed trajectories: **302 of those 397 steps — 76% — come before the agent
+read the cue**, so before it could know `/opt/grader` exists.
+
+Those steps are not simply mislabelled. They plausibly carry *task pressure*,
+which the model may well represent and which is a real thing. But they cannot
+carry intent to take a route the agent has not discovered, and training on them
+makes the probe an **outcome predictor** ("will this trajectory cross?")
+reported as an **imminence detector** ("is it about to cross?"). The study asks
+the second question.
+
+So two rules, both cheap because the activations are stored:
+
+| rule | positives | per trajectory | before the cue read |
+|---|---:|---:|---:|
+| `R1` `step ≤ t*` (the design's) | 397 | 15.9 | 302 (76%) |
+| `R2` `read ≤ step ≤ t*` | 95 | 3.8 | 0 |
+
+A third candidate, a fixed window `t*-3 … t*`, is **dominated and dropped**: the
+cue-to-crossing gap is 1 in 19 of 25 crossings, so a fixed window reaches back
+past the cue read and lands 40 of its 100 positives in the same pre-cue region,
+for no gain in count.
+
+`R2` costs sample count, and less than it appears — the binding constraint is
+5120 dimensions against ~95 positives, which `R1`'s extra 302 uninformative
+steps do not relieve. It also cannot learn a pre-cue signal, having no pre-cue
+positives; **that constrains training only**. Evaluation scores every step, so an
+`R2` probe firing before the cue read would be a real result, and the R1/R2
+comparison is itself the diagnostic: an R1 probe that fires much earlier has
+found task identity, not intent.
+
+One trajectory in 118 crossed without ever reading `grader.yaml`. `R1` labels
+it; `R2` has no defensible window and drops it.
+
+**The benign crossing is dropped from both classes.** `glm-5.3-flash` took the
+benign exit, where the gold patch genuinely passes, under no goal pressure.
+Filing its steps under negatives would teach the probe that the behaviour is
+negative.
+
+### Reported in trajectories, not in steps
+
+A trajectory's ~15 step vectors are nested prefixes of one conversation, not 15
+independent observations. Counting them as independent inflates n from 60 to
+over a thousand and makes every interval wrong.
+
+Both reports are produced, because they answer different questions. The
+step-level AUC is what the probing literature reports and what makes this
+comparable to AgentLens (D14). The trajectory report — did the alarm arrive
+before the act, and how many steps before — is what the study asks, and it is
+the one that can tell a probe from a string matcher. With `read` and `crossed` differing by
+one trajectory in 118 and a median gap of one step, a high step-level AUC is
+consistent with the probe merely detecting `/opt/grader` in the context window.
+That hypothesis makes a sharp prediction — **median lead time of exactly one
+step** — and the trajectory report tests it directly.
+
+Folds cut on instance, because crossing rate varies by task (sphinx crossed 0/5
+across the screen's five models) and a random split lets a probe score by
+recognising which repository it is reading. Twelve instances is therefore the
+ceiling on folds. The threshold is chosen on training folds: picking it on the
+held-out fold is how a lead time gets manufactured, and at n=60 it would move
+the headline by several steps.
+
+`induced_not_crossed` is scored and never trained on — the diagnostic that
+separates the two things the probe could have learned. If trajectories under
+pressure that did not cross score like the crossings, the probe reads task
+pressure rather than intent.
+
+### Throughput, measured rather than assumed
+
+D21 chose vLLM on a measurement and closed with an instruction this session
+ignored: *measure the barrier before paying for it.* The barrier was paid for
+first — a 24-wide batch launched without knowing what a lock-step round costs
+when generation lengths vary by 20×. What follows is the measurement, late.
+
+| | D21 (the ablation) | this session |
+|---|---|---|
+| model | Qwen3-Coder-30B-A3B — 3B active | Qwen3.8-27B — **dense** |
+| card | 4×RTX A6000 48 GB | 1×H100 PCIe 80 GB |
+| backend | `transformers`, serial | vLLM 0.29, **eager** |
+| decode | 16 tok/s | 19 tok/s |
+| GPU utilisation | 34%, flat | 52–100%, sawtooth |
+| engine CPU | — | 86%, 23 of 26.5 minutes |
+
+**Nineteen against sixteen is not a small gain, it is a large one cancelled.**
+The ablation ran a 3B-active MoE through a serial HuggingFace loop on a
+consumer card; this runs a 27B dense model through vLLM on an H100 and lands in
+the same place. Two things eat the difference, and both are forced:
+
+* **Dense reads nine times the weights per token.** Decode is
+  memory-bandwidth-bound — D21's own argument — and a dense 27B moves 27B of
+  parameters for every token where a 30B-A3B moves about 3B. The descent picked
+  this model *because* it is dense (extraction from a MoE means handling expert
+  routing), so the cost was bought deliberately.
+* **`enforce_eager` removes CUDA graphs.** The sawtooth in GPU utilisation is
+  what that looks like: each operator is launched separately and the card idles
+  between launches. With capture on it would be roughly 40–50 tok/s.
+
+**The capture is not optional, and finding that out was the expensive part.**
+Qwen3.8-27B dies in `profile_cudagraph_memory` with
+`torch_call_dispatcher("aten::new_empty") API call failed at
+torch/csrc/stable/ops.h`. A stack dump of the engine puts it in
+`vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py` — the gated delta
+net behind 48 of the model's 64 layers, whose custom ops go through torch's
+stable ABI. Switching the attention backend does not help: `FLASH_ATTN` and
+`TRITON_ATTN` fail identically, because the problem is the capture and not
+attention.
+
+**The lock-step barrier is the dominant term, and it is a variance tax.**
+`drive_batch` advances every trajectory one step per round, so a round costs the
+*slowest* generation in it, not the mean. Measured single-stream step lengths
+run from about 100 tokens to the full 2048-token cap — a 20× spread — and one
+trajectory thinking hard holds up 23 others. The alternative D21 names, one
+thread per trajectory against an async engine, is not reachable from here: vLLM's
+synchronous `LLM.generate` serialises under threads, so `drive_threaded` (which
+`APIModel` uses to good effect) would buy nothing without moving to the async
+engine.
+
+`nvidia-smi dmon` settles both halves of it, and corrects the reasoning that
+led here. On a 24-wide round:
+
+```
+pwr  gtemp  mtemp   sm   mem   pclk
+124     81     85    0     0   1755     <- executing sandbox commands
+348     89     91  100    56   1050     <- generating, at the 350 W cap
+```
+
+**The card is power-capped, not batch-starved.** 348 W against a 350 W limit,
+core clock throttled from 1755 to 1050 MHz, memory at 93 °C. Widening the batch
+cannot help a card already spending its whole power budget — so the stated
+reason for going from 8 to 24 ("the GPU is only at 75%") was wrong, even though
+the change was right. `nvidia-smi`'s utilisation counts time with a kernel
+resident, not work done: it did not move between the two widths while throughput
+went from 85 to 156 tok/s. **Power draw is the headroom indicator; utilisation
+is not.**
+
+**Eight of fifteen samples were the first kind.** Close to half the wall clock
+was the card waiting for twenty-four `docker exec` calls to run one after
+another, because `drive_batch` advanced trajectories in a plain loop. Only the
+generation half of a round needs the barrier — it is what makes one engine call
+per round possible — so the sandbox half is now advanced in a thread pool. Each
+generator is still touched by exactly one thread per round; only the bookkeeping
+is shared, under a lock that also covers `on_error` so two workers cannot
+interleave a caller's output.
+
+After the change, eight consecutive samples read `sm 76–99%` at 183–232 W, with
+no idle point at all, and a round of 24 takes **1 min 45 s** — about 44 minutes
+for a batch of 24 at 25 steps.
+
+The lesson generalises past this card: the two measurements that mattered were
+power draw and throughput, and neither is the number a dashboard shows first.
+
+**What this implies for the next architecture.** Both of this session's
+throughput surprises came from the model being new rather than from the harness:
+the capture failure and the dense-vs-MoE bandwidth cost. Neither is visible
+before the weights are on a card, which is the argument for a smoke run that
+generates rather than one that only loads.
+
+### What the first card cost, and what it bought
+
+Four failures, none of which any test could have caught, all of which surfaced
+in the first twenty minutes of a rented H100.
+
+**A stale import only the vLLM path could reach.** `vllm_backend` imported
+`command_token_index` from `escape_probes.chat`; the probe-position refactor had
+moved it to `escape_probes.model`. The vLLM path had not run since, and the
+suite does not import the module because `vllm` is absent in CI.
+`tests/test_backend_imports.py` now parses every module in the package and
+checks that each `from escape_probes.x import y` names something `x` has.
+Parsing rather than importing, so it needs neither torch nor vllm.
+
+**vLLM forks its engine core.** CUDA was already initialised in the parent by
+then and cannot be re-initialised across a fork. The failure is a wall of
+engine-core traceback that never mentions the rollout.
+`VLLM_WORKER_MULTIPROC_METHOD=spawn` is set in `run_batch.py` before any vLLM
+import, rather than left to whoever launches the script.
+
+**H100 SXM5 carries an NVSwitch dependency, and a single-GPU VM breaks it.**
+`nvidia-smi` reported the card correctly and `docker` worked, so the preflight
+passed — but `torch.cuda.is_available()` was `False` with CUDA error 802,
+`system not yet initialized`, and `nvidia-smi -q` showed `Fabric State: In
+Progress`. `nvidia-fabricmanager` cannot start in a VM with no NVSwitch device
+("Nothing to do"), so the GPU waits on a fabric state that never arrives. A
+reboot did not help and neither did `FABRIC_MODE=1`.
+
+The H100 **PCIe** variant has no NVSwitch, reports `Fabric State: N/A`, and
+worked immediately. The SXM5 choice was made on memory bandwidth — 3.35 against
+2 TB/s, which matters because Pass 1 generates roughly 1.7M tokens — and the
+bandwidth argument was right in isolation. **Preflight `torch.cuda.is_available()`
+before installing anything**: `nvidia-smi` succeeding says the driver is loaded,
+not that CUDA can run.
+
+Cost of the detour: 30 minutes and about $2.20. It also proved that vLLM 0.29
+recognises `qwen3_5` — a new architecture, 48 of 64 layers linear attention
+under a multimodal wrapper — since the engine initialised and got as far as
+loading weights before CUDA stopped it.
+
 ## Open questions
 
 - **Stop-loss / failure modes — deferred, does not block Stage 0 execution.**

@@ -28,6 +28,7 @@ import hashlib
 import time
 from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 from typing import Protocol
 
 from escape_probes.config import EDIT, SUBMIT, AgentConfig, Condition, RunConfig
@@ -147,7 +148,18 @@ def rollout_steps(
         generate_started = time.monotonic()
         generation = yield messages
         generate_seconds = round(time.monotonic() - generate_started, 2)
-        messages.append(Message(role="assistant", content=generation.text))
+        # A reasoning model's template renders the think block from its own
+        # field, so the backend has already split the emission — folding it into
+        # `content` makes the next step's prompt stop being a prefix of this one,
+        # and Pass 2 replays stored ids (D24). A backend that does not split
+        # leaves `reasoning` empty and the raw text stands as the content.
+        messages.append(
+            Message(
+                role="assistant",
+                content=generation.answer if generation.reasoning else generation.text,
+                reasoning_content=generation.reasoning or None,
+            )
+        )
 
         try:
             call = parse_tool_call(generation.text, allowed=agent.tools)
@@ -222,6 +234,9 @@ def rollout_steps(
         model_id=config.model.model_id,
         backend=config.model.backend,
         temperature=config.model.temperature,
+        top_p=config.model.top_p,
+        top_k=config.model.top_k,
+        max_new_tokens=config.model.max_new_tokens,
         prompt_level=agent.prompt_level,
         cue_strength=config.env.cue_strength,
         tools=agent.tools,
@@ -262,6 +277,7 @@ def drive_batch(
     steps: Sequence[RolloutSteps],
     model: BatchBackend,
     on_error: Callable[[int, Exception], None] | None = None,
+    on_round: Callable[[int, list[Generation]], None] | None = None,
 ) -> list[Trajectory | None]:
     """Advance N trajectories in lock step, one engine call per round.
 
@@ -285,6 +301,7 @@ def drive_batch(
     """
     finished: dict[int, Trajectory] = {}
     pending: dict[int, list[Message]] = {}
+    guard = Lock()
 
     def advance(index: int, pump: Callable[[], list[Message]]) -> None:
         """One step of one trajectory, or its end. Never raises.
@@ -292,25 +309,64 @@ def drive_batch(
         `pump` is `next` on the first round and `send` afterwards; the caller
         supplies it so that the priming round and the steady state share this
         error handling rather than each having its own copy of it.
+
+        Runs in a worker thread. Only the bookkeeping is shared, and only under
+        the lock: the generator itself is advanced by exactly one thread per
+        round, and `on_error` is called from inside the lock so a caller that
+        prints does not interleave with another worker's line.
         """
         try:
-            pending[index] = pump()
+            result = pump()
         except StopIteration as done:
-            finished[index] = done.value
+            with guard:
+                finished[index] = done.value
         except Exception as error:
             steps[index].close()
             if on_error is not None:
-                on_error(index, error)
+                with guard:
+                    on_error(index, error)
+        else:
+            with guard:
+                pending[index] = result
 
-    for index, generator in enumerate(steps):
-        advance(index, lambda g=generator: next(g))
+    def advance_all(work: list[tuple[int, Callable[[], list[Message]]]]) -> None:
+        """Advance a round's trajectories at once.
 
+        D21 accepted the barrier and asked for it to be measured before being
+        replaced. Measured on a 24-wide round: eight of fifteen `nvidia-smi
+        dmon` samples show `sm 0%` and 124 W against 348 W while generating —
+        close to half the wall clock is the card waiting for twenty-four
+        `docker exec` calls to run one after another.
+
+        The generation half of the round still has its barrier; this removes
+        only the sandbox half, which is I/O and overlaps freely.
+        """
+        if len(work) <= 1:
+            for index, pump in work:
+                advance(index, pump)
+            return
+        with ThreadPoolExecutor(max_workers=len(work)) as pool:
+            list(pool.map(lambda item: advance(*item), work))
+
+    advance_all([(index, lambda g=generator: next(g)) for index, generator in enumerate(steps)])
+
+    rounds = 0
     while pending:
         live = list(pending)
         generations = model.generate_batch([pending[index] for index in live])
+        if on_round is not None:
+            # Live diagnostics: trajectories reach disk only when the whole
+            # batch does, so anything worth seeing *during* a batch — the
+            # prefix-cache hit ratio above all — has to be surfaced here.
+            on_round(rounds, list(generations))
+        rounds += 1
         pending = {}
-        for index, generation in zip(live, generations, strict=True):
-            advance(index, lambda i=index, g=generation: steps[i].send(g))
+        advance_all(
+            [
+                (index, lambda i=index, g=generation: steps[i].send(g))
+                for index, generation in zip(live, generations, strict=True)
+            ]
+        )
 
     return [finished.get(index) for index in range(len(steps))]
 

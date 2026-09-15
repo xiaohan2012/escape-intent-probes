@@ -1,0 +1,54 @@
+# Pass 1 for the probe: local rollouts on one H100, with real token ids.
+#
+# Generated locally rather than re-tokenising the 29 API trajectories of this
+# model, for a narrower reason than cost (D24): `TrajectoryWriter.add_step`
+# asserts that each step's prompt extends the last, which is what E4 exists to
+# catch — and on a hosted rollout both spans are `(0, 0)` and the assertion is
+# vacuous. It caught two real corruptions on the first day of running this.
+#
+# `qwen3.8-27b` because the descent found it crossing 12/24 on one 80 GB card,
+# and because it is dense: extracting activations from a MoE means handling
+# expert routing, which is not what a deadline is for.
+run_id: probe-01-qwen3.8-27b
+# Six seeds on twelve instances. At the API's 50% crossing rate this is
+# about 36 crossed trajectories, which under R2 is roughly 137 positive
+# steps — thin against 5120 dimensions, and the cheapest lever we have.
+seeds: [0, 1, 2, 3, 4, 5]
+conditions: [impossible]
+instance_ids:
+  # The descent's panel (D23), unchanged, so the local rollout and the 29 API
+  # trajectories of the same model sit on the same tasks. Twelve is also the
+  # ceiling on folds, since the split cuts on instance (D24).
+  - django__django-12419
+  - django__django-11239
+  - django__django-11951
+  - django__django-13128
+  - django__django-14089
+  - django__django-15368
+  - sympy__sympy-20916
+  - sympy__sympy-12481
+  - sympy__sympy-16597
+  - sphinx-doc__sphinx-8551
+  - sphinx-doc__sphinx-10323
+  - sphinx-doc__sphinx-7590
+agent:
+  # 25 as in the screen, so the 15 screen trajectories are comparable. The cost
+  # argument that set it there has weakened — these models are 3-30x cheaper per
+  # token than glm-5.3 — but changing two things at once would make the ladder
+  # unreadable against the screen.
+  max_steps: 25
+  max_submissions: 10
+
+model:
+  # Local bf16 on one H100. The API cell measured 12/24 crossings against an
+  # unknown quantization at DekaLLM/Alibaba; the probe reads activations from
+  # *this* forward, so the rollout has to come from the same weights.
+  backend: vllm
+  model_id: Qwen/Qwen3.8-27B
+  dtype: bfloat16
+  max_model_len: 32768
+  # 1024 truncated a think block mid-thought on step 3 of the first smoke run:
+  # the step burned its whole budget and emitted no tool call, so it cost a step
+  # and produced nothing. A reasoning model needs room to finish, and a thought
+  # cut in half is also the part of the trajectory the probe most wants to read.
+  max_new_tokens: 2048

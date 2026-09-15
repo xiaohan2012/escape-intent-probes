@@ -94,6 +94,18 @@ class Step(BaseModel):
     """As the server counted them, for a hosted backend. Zero elsewhere, where
     `prompt_span` and `gen_span` already say it."""
 
+    finish_reason: str = ""
+    """Why generation ended: "stop", "length" (hit `max_new_tokens`), or empty
+    for trajectories written before this was recorded. A "length" step's text
+    is truncated mid-thought, which matters when reading its reasoning."""
+
+    cached_tokens: int = -1
+    """Prompt tokens the engine reused from its prefix cache for this step, or
+    -1 if it did not say. Against `prompt_span` this is the cache-hit ratio;
+    every step after the first should be nearly all hit, since each prompt is
+    the previous one plus a suffix. Near-zero from step 1 onwards means the
+    whole conversation is re-prefilled every round (vLLM #45238)."""
+
     generate_seconds: float = 0.0
     """Time in the model. Together with `exec_seconds` this splits a step's cost
     between the two things that can be optimised independently — decode speed
@@ -127,6 +139,14 @@ class TrajectoryMeta(BaseModel):
     vLLM path existed still load; new ones always set it."""
 
     temperature: float
+    top_p: float = 1.0
+    top_k: int = 0
+    max_new_tokens: int = 0
+    """The rest of the sampling config, defaulted for trajectories written
+    before they were echoed. `max_new_tokens=0` means "not recorded", never "no
+    budget" — the docstring above promises the config in full, and temperature
+    alone does not determine the distribution."""
+
     prompt_level: str
     cue_strength: str
     tools: tuple[str, ...]
@@ -148,12 +168,16 @@ class Trajectory(BaseModel):
     token_ids: list[int]
 
     def save(self, directory: Path) -> None:
+        # meta.json last: it is the marker resume (`run_batch`) and Pass 2 key
+        # on, so it must not exist before the files it vouches for do — a kill
+        # between writes would otherwise leave a "finished" trajectory with no
+        # tokens.npy that is never re-run and crashes extraction.
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / "meta.json").write_text(self.meta.model_dump_json(indent=2))
         with (directory / "steps.jsonl").open("w") as handle:
             for step in self.steps:
                 handle.write(step.model_dump_json() + "\n")
         np.save(directory / "tokens.npy", np.asarray(self.token_ids, dtype=np.int32))
+        (directory / "meta.json").write_text(self.meta.model_dump_json(indent=2))
 
     @classmethod
     def load(cls, directory: Path) -> Trajectory:
@@ -207,6 +231,8 @@ class TrajectoryWriter:
             generation_text=generation.text,
             prompt_tokens=generation.prompt_tokens,
             completion_tokens=generation.completion_tokens,
+            cached_tokens=generation.cached_tokens,
+            finish_reason=generation.finish_reason,
             **fields,
         )
         self.steps.append(step)

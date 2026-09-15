@@ -34,6 +34,13 @@ model = [
     "torch>=2.4",
     "transformers>=4.51",
     "accelerate",
+    # Pass 2 runs the model through `transformers`, and a linear-attention
+    # architecture without this falls back to a reference PyTorch kernel with a
+    # warning rather than an error: "correct but much slower". Qwen3.8-27B has
+    # 48 such layers out of 64, so the fallback is most of the forward. A
+    # dependency whose absence costs hours and says so only in a log line
+    # belongs in the manifest.
+    "flash-linear-attention",
 ]
 # The fast inference path, in its own group because vllm pins its own torch and
 # resolving it together with the `model` group tends to fail. Install it into a

@@ -71,6 +71,11 @@ class HFModel:
                 top_k=self.config.top_k,
                 max_new_tokens=self.config.max_new_tokens,
                 pad_token_id=self.tokenizer.pad_token_id or self.tokenizer.eos_token_id,
+                # Explicit, because `generate()` fills unspecified knobs from
+                # the checkpoint's generation_config — Qwen ships 1.05 there —
+                # while the vLLM path's explicit SamplingParams uses 1.0. A
+                # reference implementation must sample the same distribution.
+                repetition_penalty=1.0,
             )
 
         gen_ids = output[0].tolist()[len(prompt_ids) :]
@@ -80,6 +85,10 @@ class HFModel:
             prompt_token_ids=tuple(prompt_ids),
             gen_token_ids=tuple(gen_ids),
             text=text,
+            # `generate()` returns no finish reason; a generation that used the
+            # whole budget is taken as capped. It can also have ended naturally
+            # at exactly the cap, which vLLM would distinguish and this cannot.
+            finish_reason="length" if len(gen_ids) >= self.config.max_new_tokens else "stop",
             tool_start_token_idx=command_token_index(gen_ids, text, self._decode),
         )
 

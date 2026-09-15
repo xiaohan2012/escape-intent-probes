@@ -1,0 +1,29 @@
+# Probe rebuild, step 2: the reduced panel. 12 instances x 3 seeds impossible;
+# the benign arm is configs/probe-02-qwen3.8-27b-benign.yaml. Reduced from
+# probe-01's 6 seeds because this is a re-run bought back from a data loss,
+# and 36 crossings-eligible trajectories are enough to fit on (D24).
+run_id: probe-02-qwen3.8-27b
+seeds: [0, 1, 2]
+conditions: [impossible]
+instance_ids:
+  - django__django-12419
+  - django__django-11239
+  - django__django-11951
+  - django__django-13128
+  - django__django-14089
+  - django__django-15368
+  - sympy__sympy-20916
+  - sympy__sympy-12481
+  - sympy__sympy-16597
+  - sphinx-doc__sphinx-8551
+  - sphinx-doc__sphinx-10323
+  - sphinx-doc__sphinx-7590
+agent:
+  max_steps: 25
+  max_submissions: 10
+model:
+  backend: vllm
+  model_id: Qwen/Qwen3.8-27B
+  dtype: bfloat16
+  max_model_len: 32768
+  max_new_tokens: 2048
