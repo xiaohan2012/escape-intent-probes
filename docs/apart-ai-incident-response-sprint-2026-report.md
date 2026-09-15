@@ -1,6 +1,6 @@
 # Can we detect an agent's intent to escape before it actually does so?
 
-**Han Xiao** (xiaohan2012@gmail.com) · **Yong Deng** (scdeng272@gmail.com)
+**Han Xiao** (xiaohan2012@gmail.com) · **Yong Deng** (scdeng27@gmail.com)
 
 ## TL;DR
 
